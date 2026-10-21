@@ -24,6 +24,7 @@ import { ExcelGuideModal } from './components/ExcelGuideModal';
 import { DueTodayHolder } from './components/DueTodayHolder';
 import { CalendarView } from './components/CalendarView';
 import { StreakAnalyticsView } from './components/StreakAnalyticsView';
+import { convertMcpPayloadToDeckAndCards } from './services/mcpService';
 
 export default function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -74,14 +75,39 @@ export default function App() {
 
   // Load decks & cards, automatically shift unfinished past due cards, and evaluate streak
   useEffect(() => {
-    const loadedDecks = getStoredDecks();
-    const loadedCards = getStoredCards();
+    let loadedDecks = getStoredDecks();
+    let loadedCards = getStoredCards();
     const { updatedCards } = rolloverOverdueCardsFromPastDays(loadedCards);
+    loadedCards = updatedCards;
+
+    // Check for External MCP deep-link payload (?mcp_deck=...)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const encodedMcp = params.get('mcp_deck');
+      if (encodedMcp) {
+        const base64 = encodedMcp.replace(/-/g, '+').replace(/_/g, '/');
+        const decodedJson = decodeURIComponent(
+          Array.from(atob(base64), c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+        );
+        const payload = JSON.parse(decodedJson);
+        const { deck: mcpDeck, cards: mcpCards } = convertMcpPayloadToDeckAndCards(payload);
+        if (mcpCards.length > 0) {
+          loadedDecks = [mcpDeck, ...loadedDecks];
+          loadedCards = [...mcpCards, ...loadedCards];
+          saveStoredDecks(loadedDecks);
+          saveStoredCards(loadedCards);
+          showToast(`Imported "${mcpDeck.name}" from External MCP`);
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch (err) {
+      console.error('Failed to import mcp_deck parameter:', err);
+    }
 
     setDecks(loadedDecks);
-    setCards(updatedCards);
+    setCards(loadedCards);
     setDueSessionState(getDueTodaySessionState());
-    setStreak(evaluateAndRecordDailyStreak(updatedCards));
+    setStreak(evaluateAndRecordDailyStreak(loadedCards));
   }, []);
 
   // Automatic background rollover check when the day ends

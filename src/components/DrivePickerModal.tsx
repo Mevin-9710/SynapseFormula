@@ -9,7 +9,6 @@ import {
   ArrowRight,
   Download,
   HelpCircle,
-  Sparkles,
   Terminal,
   Copy,
   Check,
@@ -24,7 +23,7 @@ import {
   extractRowVariables,
 } from '../services/excelParser';
 import {
-  generateDeckViaGeminiMcp,
+  VERCEL_MCP_ENDPOINT,
   pullPendingExternalMcpDecks,
 } from '../services/mcpService';
 import { googleSignIn, getAccessToken } from '../services/auth';
@@ -39,13 +38,6 @@ interface DrivePickerModalProps {
 }
 
 type ImportSourceTab = 'mcp' | 'drive' | 'local';
-
-const QUICK_AI_TOPICS = [
-  'Thermodynamics & Maxwell Relations',
-  'Special Relativity & Lorentz Transformations',
-  'Multivariable Calculus & Vector Identities',
-  'Quantum Wave Mechanics & Operators',
-];
 
 export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   isOpen,
@@ -62,12 +54,9 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
-  // Gemini MCP Direct Deck Builder State
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiCardCount, setAiCardCount] = useState<number>(8);
-  const [isGeneratingMcp, setIsGeneratingMcp] = useState(false);
-  const [showMcpEndpointConfig, setShowMcpEndpointConfig] = useState(false);
+  // External MCP Server State
   const [copiedMcpConfig, setCopiedMcpConfig] = useState(false);
+  const [copiedMcpUrl, setCopiedMcpUrl] = useState(false);
   const [isSyncingMcpQueue, setIsSyncingMcpQueue] = useState(false);
 
   // Spreadsheet mapping state
@@ -103,7 +92,6 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     setSelectedFile(null);
     setParsedSummary(null);
     setError(null);
-    setIsGeneratingMcp(false);
   };
 
   const checkAuthAndLoad = async () => {
@@ -255,26 +243,6 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     onClose();
   };
 
-  const handleGenerateWithGeminiMcp = async () => {
-    if (!aiPrompt.trim()) {
-      setError('Describe the topic or formulas you want Gemini to build.');
-      return;
-    }
-
-    setError(null);
-    setIsGeneratingMcp(true);
-    try {
-      const { deck, cards } = await generateDeckViaGeminiMcp(aiPrompt.trim(), aiCardCount);
-      onDeckCreated(deck, cards);
-      setAiPrompt('');
-      onClose();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to generate deck via Gemini MCP.');
-    } finally {
-      setIsGeneratingMcp(false);
-    }
-  };
-
   const handleSyncExternalMcpQueue = async () => {
     setError(null);
     setIsSyncingMcpQueue(true);
@@ -295,14 +263,11 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     }
   };
 
-  const mcpEndpointUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/api/mcp` : '/api/mcp';
-
   const mcpConfigJson = JSON.stringify(
     {
       mcpServers: {
         synapseformula: {
-          url: mcpEndpointUrl,
+          url: VERCEL_MCP_ENDPOINT,
           transport: 'http',
         },
       },
@@ -317,6 +282,12 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     setTimeout(() => setCopiedMcpConfig(false), 2000);
   };
 
+  const handleCopyMcpUrl = () => {
+    navigator.clipboard.writeText(VERCEL_MCP_ENDPOINT);
+    setCopiedMcpUrl(true);
+    setTimeout(() => setCopiedMcpUrl(false), 2000);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -328,7 +299,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
             {step === 'configure' ? (
               <FileSpreadsheet className="w-4 h-4 text-black" />
             ) : sourceTab === 'mcp' ? (
-              <Sparkles className="w-4 h-4 text-indigo-600" />
+              <Terminal className="w-4 h-4 text-indigo-600" />
             ) : sourceTab === 'drive' ? (
               <Cloud className="w-4 h-4 text-black" />
             ) : (
@@ -362,8 +333,8 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                     : 'text-black/55 hover:text-black'
                 }`}
               >
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>Gemini MCP</span>
+                <Terminal className="w-3.5 h-3.5 shrink-0" />
+                <span>External MCP</span>
               </button>
 
               <button
@@ -412,98 +383,22 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {step === 'select' ? (
             <>
-              {/* TAB 1: GEMINI & MCP DIRECT DECK BUILDER */}
+              {/* TAB 1: EXTERNAL MCP SERVER CONNECTION ONLY */}
               {sourceTab === 'mcp' && (
-                <div className="space-y-3.5">
-                  <div className="rounded-2xl p-3.5 bg-gradient-to-br from-indigo-50/90 via-violet-50/50 to-white border border-indigo-200/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                        Ask Gemini via MCP Tool
-                      </span>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700">
-                        create_formula_deck
-                      </span>
-                    </div>
-
-                    <textarea
-                      rows={3}
-                      value={aiPrompt}
-                      onChange={e => setAiPrompt(e.target.value)}
-                      placeholder="e.g., Maxwell's equations & electromagnetic wave propagation with variable units..."
-                      className="w-full p-3 rounded-xl text-xs bg-white border border-indigo-200/90 text-black placeholder:text-black/40 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
-                    />
-
-                    {/* Quick Topic Suggestions */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {QUICK_AI_TOPICS.map(topic => (
-                        <button
-                          key={topic}
-                          type="button"
-                          onClick={() => setAiPrompt(topic)}
-                          className="text-[10px] font-medium px-2 py-1 rounded-lg bg-white/90 hover:bg-indigo-50 text-black/70 hover:text-indigo-700 border border-black/10 transition-colors cursor-pointer"
-                        >
-                          {topic}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Card Count & Generate Action */}
-                    <div className="flex items-center justify-between gap-2 pt-1">
-                      <div className="flex items-center gap-1">
-                        {[5, 8, 12].map(count => (
-                          <button
-                            key={count}
-                            type="button"
-                            onClick={() => setAiCardCount(count)}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold tabular-nums cursor-pointer transition-colors ${
-                              aiCardCount === count
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-white text-black/65 border border-black/10 hover:text-black'
-                            }`}
-                          >
-                            {count} cards
-                          </button>
-                        ))}
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Terminal className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <span className="text-xs font-bold text-black truncate">
+                          External MCP Server Link
+                        </span>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={handleGenerateWithGeminiMcp}
-                        disabled={isGeneratingMcp}
-                        className="h-10 px-4 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
-                      >
-                        {isGeneratingMcp ? (
-                          <>
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>Building Deck...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="w-3.5 h-3.5" />
-                            <span>Create Deck</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* External MCP Client Bridge */}
-                  <div className="rounded-xl border border-black/10 bg-black/[0.02] p-3 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => setShowMcpEndpointConfig(prev => !prev)}
-                        className="flex items-center gap-2 text-xs font-bold text-black/80 hover:text-black cursor-pointer"
-                      >
-                        <Terminal className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>External MCP Server Link</span>
-                      </button>
                       <button
                         type="button"
                         onClick={handleSyncExternalMcpQueue}
                         disabled={isSyncingMcpQueue}
-                        className="glass-button px-2.5 py-1 rounded-lg text-[11px] font-semibold text-black flex items-center gap-1 cursor-pointer"
+                        className="glass-button-primary px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
                       >
                         <RefreshCw
                           className={`w-3 h-3 ${isSyncingMcpQueue ? 'animate-spin' : ''}`}
@@ -512,35 +407,57 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                       </button>
                     </div>
 
-                    {showMcpEndpointConfig && (
-                      <div className="space-y-2 pt-1 border-t border-black/5">
-                        <p className="text-[11px] text-black/60 leading-relaxed">
-                          Link external AI agents (Gemini CLI, Claude Desktop, Cursor) to create decks directly via Model Context Protocol (`POST /api/mcp`):
-                        </p>
-                        <div className="relative">
-                          <pre className="p-2.5 rounded-lg bg-black text-emerald-300 text-[10px] overflow-x-auto font-mono leading-relaxed">
-                            {mcpConfigJson}
-                          </pre>
-                          <button
-                            type="button"
-                            onClick={handleCopyMcpConfig}
-                            className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/15 hover:bg-white/25 text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
-                          >
-                            {copiedMcpConfig ? (
-                              <>
-                                <Check className="w-3 h-3 text-emerald-400" />
-                                <span>Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-3 h-3" />
-                                <span>Copy</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    <p className="text-[11px] text-black/65 leading-relaxed">
+                      Connect Gemini CLI, Claude Desktop, or Cursor to directly create decks via the <code className="font-mono font-bold text-indigo-700">create_formula_deck</code> MCP tool on your hosted Vercel domain:
+                    </p>
+
+                    {/* Hosted Vercel MCP Endpoint Pill */}
+                    <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white border border-black/10">
+                      <code className="text-[11px] font-mono text-black truncate">
+                        {VERCEL_MCP_ENDPOINT}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={handleCopyMcpUrl}
+                        className="glass-button px-2 py-1 rounded-md text-[10px] font-bold text-black flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        {copiedMcpUrl ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>Copied URL</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy URL</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* MCP Client Config Snippet */}
+                    <div className="relative">
+                      <pre className="p-3 rounded-xl bg-black text-emerald-300 text-[10px] overflow-x-auto font-mono leading-relaxed">
+                        {mcpConfigJson}
+                      </pre>
+                      <button
+                        type="button"
+                        onClick={handleCopyMcpConfig}
+                        className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/15 hover:bg-white/25 text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedMcpConfig ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-400" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy Config</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

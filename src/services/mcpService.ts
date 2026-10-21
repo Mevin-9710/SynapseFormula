@@ -1,5 +1,8 @@
 import { Deck, Flashcard, VariableDefinition } from '../types';
 
+export const VERCEL_PRODUCTION_DOMAIN = 'https://synapse-formula.vercel.app';
+export const VERCEL_MCP_ENDPOINT = `${VERCEL_PRODUCTION_DOMAIN}/api/mcp`;
+
 export interface McpFormulaItem {
   statement: string;
   formula: string;
@@ -9,12 +12,12 @@ export interface McpFormulaItem {
 }
 
 export interface McpDeckPayload {
-  id: string;
+  id?: string;
   deckName: string;
-  description: string;
+  description?: string;
   formulas: McpFormulaItem[];
-  createdAt: string;
-  source: 'gemini-mcp' | 'external-mcp';
+  createdAt?: string;
+  source?: 'external-mcp';
 }
 
 export const convertMcpPayloadToDeckAndCards = (
@@ -51,12 +54,9 @@ export const convertMcpPayloadToDeckAndCards = (
 
   const deck: Deck = {
     id: deckId,
-    name: payload.deckName.trim() || 'AI Generated Deck',
+    name: (payload.deckName || 'MCP Formula Deck').trim(),
     description:
-      payload.description?.trim() ||
-      (payload.source === 'gemini-mcp'
-        ? 'Generated directly by Gemini via MCP'
-        : 'Created via external MCP connection'),
+      payload.description?.trim() || 'Created via External MCP (synapse-formula.vercel.app)',
     lastSyncedAt: now,
     syncIntervalHours: 24,
     columnMapping: {
@@ -85,36 +85,24 @@ export const convertMcpPayloadToDeckAndCards = (
   return { deck, cards };
 };
 
-export const generateDeckViaGeminiMcp = async (
-  prompt: string,
-  cardCount: number = 8
-): Promise<{ deck: Deck; cards: Flashcard[] }> => {
-  const response = await fetch('/api/mcp/gemini-deck', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, cardCount }),
-  });
-
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data?.error || 'Failed to generate deck with Gemini MCP.');
-  }
-
-  if (!data?.deck || !Array.isArray(data.deck.formulas) || data.deck.formulas.length === 0) {
-    throw new Error('Gemini returned an empty formula list. Try a more specific topic.');
-  }
-
-  return convertMcpPayloadToDeckAndCards(data.deck);
-};
-
 export const pullPendingExternalMcpDecks = async (): Promise<
   Array<{ deck: Deck; cards: Flashcard[] }>
 > => {
-  const response = await fetch('/api/mcp/pending-decks');
-  if (!response.ok) return [];
-  const data = await response.json();
-  const list: McpDeckPayload[] = Array.isArray(data?.decks) ? data.decks : [];
-  return list
-    .map(item => convertMcpPayloadToDeckAndCards(item))
-    .filter(item => item.cards.length > 0);
+  const endpoints = ['/api/mcp?action=pending', '/api/mcp/pending-decks'];
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+      const data = await response.json();
+      const list: McpDeckPayload[] = Array.isArray(data?.decks) ? data.decks : [];
+      if (list.length > 0) {
+        return list
+          .map(item => convertMcpPayloadToDeckAndCards(item))
+          .filter(item => item.cards.length > 0);
+      }
+    } catch {
+      // try next endpoint
+    }
+  }
+  return [];
 };
