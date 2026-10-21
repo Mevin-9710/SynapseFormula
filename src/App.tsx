@@ -37,6 +37,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
 
   const [currentView, setCurrentView] = useState<NavView>('decks');
+  const [viewRestoreKey, setViewRestoreKey] = useState<number>(0);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [browseDeck, setBrowseDeck] = useState<Deck | null>(null);
@@ -53,6 +54,18 @@ export default function App() {
   const [syncingDeckIds, setSyncingDeckIds] = useState<Record<string, boolean>>({});
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+
+  // Automatically restore scroll position to the top with smooth animation on any page/session switch
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+    document.documentElement.scrollTo?.({ top: 0, left: 0, behavior: 'smooth' });
+    document.body.scrollTo?.({ top: 0, left: 0, behavior: 'smooth' });
+  }, [currentView, viewRestoreKey, activeStudyDeck]);
+
+  const handleSelectView = (nextView: NavView) => {
+    setCurrentView(nextView);
+    setViewRestoreKey(prev => prev + 1);
+  };
 
   const showToast = (msg: string, durationMs = 3000) => {
     setSyncToast(msg);
@@ -336,7 +349,10 @@ export default function App() {
   // Active study session takes full screen
   if (activeStudyDeck) {
     return (
-      <div className="min-h-screen mobile-canvas-bg selection:bg-black selection:text-white">
+      <div
+        key={`study-${activeStudyDeck.id}`}
+        className="min-h-screen mobile-canvas-bg selection:bg-black selection:text-white page-restore-enter"
+      >
         <StudySession
           deck={activeStudyDeck}
           cards={activeSessionCards}
@@ -351,6 +367,7 @@ export default function App() {
             setCards(latestCards);
             setDueSessionState(getDueTodaySessionState());
             setStreak(evaluateAndRecordDailyStreak(latestCards));
+            setViewRestoreKey(prev => prev + 1);
           }}
           onDeleteCard={handleDeleteCard}
         />
@@ -365,7 +382,7 @@ export default function App() {
       {/* Top Navbar & Pinned Bottom Tab Bar */}
       <Navbar
         currentView={currentView}
-        onSelectView={setCurrentView}
+        onSelectView={handleSelectView}
         onOpenConnectModal={() => setIsConnectModalOpen(true)}
         user={user}
         onSignIn={handleSignIn}
@@ -394,8 +411,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Main View Container */}
-      <main className="flex-1 max-w-xl mx-auto w-full px-4 py-4">
+      {/* Main View Container with Animated Top Restoration */}
+      <main
+        key={`${currentView}-${viewRestoreKey}`}
+        className="flex-1 max-w-xl mx-auto w-full px-4 py-4 page-restore-enter"
+      >
         {/* VIEW 1: MAIN DASHBOARD (DUE TODAY HOLDER + DECKS) */}
         {currentView === 'decks' && (
           <div className="space-y-5">
