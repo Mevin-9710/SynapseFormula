@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+:root {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color-scheme: light;
+}
+
+* {
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Minimalist Apple Liquid Glass Styling */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.04);
+}
+
+.glass-card-hover {
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.glass-card-hover:active {
+  transform: scale(0.985);
+}
+
+.glass-button {
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  transition: all 0.15s ease;
+}
+
+.glass-button:active {
+  background: rgba(0, 0, 0, 0.08);
+  transform: scale(0.97);
+}
+
+.glass-button-primary {
+  background: #000000;
+  color: #ffffff;
+  border: 1px solid #000000;
+  transition: all 0.15s ease;
+}
+
+.glass-button-primary:active {
+  background: #222222;
+  transform: scale(0.97);
+}
+
+/* KaTeX custom sizing inside JetBrains Mono container */
+.katex-display {
+  margin: 0.35em 0 !important;
+}
+
+/* Mobile clean canvas background */
+.mobile-canvas-bg {
+  background-color: #f6f7f8;
+}
+
+/* Safe area padding for mobile notches & home indicator */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}

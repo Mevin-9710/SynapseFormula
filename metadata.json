@@ -1,0 +1,6 @@
+{
+  "name": "SynapseFormula - Physics & Math Spaced Repetition",
+  "description": "Scientific spaced repetition flashcard system for physics and mathematical formulas synced directly with Google Drive Excel files.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
