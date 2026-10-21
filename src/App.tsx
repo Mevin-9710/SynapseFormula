@@ -23,6 +23,7 @@ import { FormulaBrowserModal } from './components/FormulaBrowserModal';
 import { ExcelGuideModal } from './components/ExcelGuideModal';
 import { DueTodayHolder } from './components/DueTodayHolder';
 import { CalendarView } from './components/CalendarView';
+import { StreakAnalyticsView } from './components/StreakAnalyticsView';
 
 export default function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -469,17 +470,14 @@ export default function App() {
           </div>
         )}
 
-        {/* VIEW 2: DUE TODAY */}
-        {currentView === 'due' && (
-          <div className="space-y-4">
-            <DueTodayHolder
-              decks={decks}
-              cards={cards}
-              dueSessionState={dueSessionState}
-              onReviewDue={handleReviewDue}
-              showExpandedCardsByDefault={true}
-            />
-          </div>
+        {/* VIEW 2: STREAKS & PERFORMANCE ANALYTICS */}
+        {currentView === 'analytics' && (
+          <StreakAnalyticsView
+            decks={decks}
+            cards={cards}
+            streak={streak}
+            onReviewDue={() => handleReviewDue()}
+          />
         )}
 
         {/* VIEW 3: CALENDAR */}
