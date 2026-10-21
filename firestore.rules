@@ -1,0 +1,312 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBoundedStringList(arr, maxItems, maxItemLen) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= maxItemLen));
+    }
+
+    // Validation Blueprint: DeckRecord
+    function isValidDeckRecord(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'name',
+          'description',
+          'cardsCount',
+          'syncIntervalHours',
+          'lastSyncedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'name',
+          'description',
+          'cardsCount',
+          'syncIntervalHours',
+          'lastSyncedAt',
+          'googleDriveFileId',
+          'googleDriveFileName',
+          'googleDriveMimeType',
+          'googleDriveModifiedTime',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 200 &&
+        data.description is string &&
+        data.description.size() <= 1000 &&
+        data.cardsCount is int &&
+        data.cardsCount >= 0 &&
+        data.cardsCount <= 10000 &&
+        data.syncIntervalHours is int &&
+        data.syncIntervalHours >= 1 &&
+        data.syncIntervalHours <= 720 &&
+        data.lastSyncedAt is string &&
+        data.lastSyncedAt.size() >= 1 &&
+        data.lastSyncedAt.size() <= 64 &&
+        (!('googleDriveFileId' in data) || (data.googleDriveFileId is string && data.googleDriveFileId.size() >= 1 && data.googleDriveFileId.size() <= 256)) &&
+        (!('googleDriveFileName' in data) || (data.googleDriveFileName is string && data.googleDriveFileName.size() >= 1 && data.googleDriveFileName.size() <= 256)) &&
+        (!('googleDriveMimeType' in data) || (data.googleDriveMimeType is string && data.googleDriveMimeType.size() >= 1 && data.googleDriveMimeType.size() <= 128)) &&
+        (!('googleDriveModifiedTime' in data) || (data.googleDriveModifiedTime is string && data.googleDriveModifiedTime.size() >= 1 && data.googleDriveModifiedTime.size() <= 64)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: CardRecord
+    function isValidCardRecord(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'deckId',
+          'statement',
+          'formula',
+          'repetitionStage',
+          'intervalDays',
+          'easeFactor',
+          'repetitionCount',
+          'dueDate',
+          'state',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'deckId',
+          'statement',
+          'formula',
+          'repetitionStage',
+          'intervalDays',
+          'easeFactor',
+          'repetitionCount',
+          'dueDate',
+          'state',
+          'explanation',
+          'category',
+          'lastReviewedAt',
+          'firstTimeReviewedAt',
+          'shiftedFromDate',
+          'rolloverCount',
+          'variableSymbols',
+          'variableMeanings',
+          'variableUnits',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.deckId is string &&
+        data.deckId.size() >= 1 &&
+        data.deckId.size() <= 128 &&
+        data.deckId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.statement is string &&
+        data.statement.size() >= 1 &&
+        data.statement.size() <= 2000 &&
+        data.formula is string &&
+        data.formula.size() >= 1 &&
+        data.formula.size() <= 2000 &&
+        data.repetitionStage is string &&
+        data.repetitionStage in ['statement', 'cloze', 'variables'] &&
+        (data.intervalDays is int || data.intervalDays is float) &&
+        data.intervalDays >= 0 &&
+        data.intervalDays <= 36500 &&
+        (data.easeFactor is int || data.easeFactor is float) &&
+        data.easeFactor >= 1.0 &&
+        data.easeFactor <= 10.0 &&
+        data.repetitionCount is int &&
+        data.repetitionCount >= 0 &&
+        data.repetitionCount <= 100000 &&
+        data.dueDate is string &&
+        data.dueDate.size() >= 1 &&
+        data.dueDate.size() <= 64 &&
+        data.state is string &&
+        data.state in ['new', 'learning', 'review', 'mastered'] &&
+        (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 2000)) &&
+        (!('category' in data) || (data.category is string && data.category.size() <= 200)) &&
+        (!('lastReviewedAt' in data) || (data.lastReviewedAt is string && data.lastReviewedAt.size() >= 1 && data.lastReviewedAt.size() <= 64)) &&
+        (!('firstTimeReviewedAt' in data) || (data.firstTimeReviewedAt is string && data.firstTimeReviewedAt.size() >= 1 && data.firstTimeReviewedAt.size() <= 64)) &&
+        (!('shiftedFromDate' in data) || (data.shiftedFromDate is string && data.shiftedFromDate.size() >= 1 && data.shiftedFromDate.size() <= 32)) &&
+        (!('rolloverCount' in data) || (data.rolloverCount is int && data.rolloverCount >= 0 && data.rolloverCount <= 10000)) &&
+        (!('variableSymbols' in data) || isBoundedStringList(data.variableSymbols, 20, 200)) &&
+        (!('variableMeanings' in data) || isBoundedStringList(data.variableMeanings, 20, 500)) &&
+        (!('variableUnits' in data) || isBoundedStringList(data.variableUnits, 20, 100)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: StreakRecord
+    function isValidStreakRecord(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'currentStreak',
+          'bestStreak',
+          'completedDates',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'currentStreak',
+          'bestStreak',
+          'completedDates',
+          'lastStudiedDate',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId.size() >= 1 &&
+        data.ownerId.size() <= 128 &&
+        data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.currentStreak is int &&
+        data.currentStreak >= 0 &&
+        data.currentStreak <= 36500 &&
+        data.bestStreak is int &&
+        data.bestStreak >= 0 &&
+        data.bestStreak <= 36500 &&
+        isBoundedStringList(data.completedDates, 1000, 32) &&
+        (!('lastStudiedDate' in data) || (data.lastStudiedDate is string && data.lastStudiedDate.size() >= 1 && data.lastStudiedDate.size() <= 32)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function ownsParentDeck(deckId) {
+      return (
+        exists(/databases/$(database)/documents/decks/$(deckId)) &&
+        get(/databases/$(database)/documents/decks/$(deckId)).data.ownerId == request.auth.uid
+      ) || (
+        existsAfter(/databases/$(database)/documents/decks/$(deckId)) &&
+        getAfter(/databases/$(database)/documents/decks/$(deckId)).data.ownerId == request.auth.uid
+      );
+    }
+
+    // Collection 1: /decks/{deckId}
+    match /decks/{deckId} {
+      allow get: if isSignedIn() && isValidId(deckId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isSignedIn() &&
+        isValidId(deckId) &&
+        isValidDeckRecord(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(deckId) &&
+        isValidDeckRecord(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name',
+          'description',
+          'cardsCount',
+          'syncIntervalHours',
+          'lastSyncedAt',
+          'googleDriveFileId',
+          'googleDriveFileName',
+          'googleDriveMimeType',
+          'googleDriveModifiedTime',
+          'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(deckId) && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection 2: /cards/{cardId}
+    match /cards/{cardId} {
+      allow get: if isSignedIn() && isValidId(cardId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isSignedIn() &&
+        isValidId(cardId) &&
+        isValidCardRecord(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        ownsParentDeck(incoming().deckId);
+      allow update: if isSignedIn() &&
+        isValidId(cardId) &&
+        isValidCardRecord(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().deckId == existing().deckId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        ownsParentDeck(incoming().deckId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'statement',
+          'formula',
+          'repetitionStage',
+          'intervalDays',
+          'easeFactor',
+          'repetitionCount',
+          'dueDate',
+          'state',
+          'explanation',
+          'category',
+          'lastReviewedAt',
+          'firstTimeReviewedAt',
+          'shiftedFromDate',
+          'rolloverCount',
+          'variableSymbols',
+          'variableMeanings',
+          'variableUnits',
+          'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(cardId) && existing().ownerId == request.auth.uid;
+    }
+
+    // Collection 3: /user_streaks/{userId}
+    match /user_streaks/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && existing().ownerId == request.auth.uid;
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidStreakRecord(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidStreakRecord(incoming()) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'currentStreak',
+          'bestStreak',
+          'completedDates',
+          'lastStudiedDate',
+          'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && existing().ownerId == request.auth.uid;
+    }
+  }
+}

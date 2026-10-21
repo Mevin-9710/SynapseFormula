@@ -1,5 +1,6 @@
 import { Deck, Flashcard, DeckSessionState, StudySessionMode, StudyStreakState } from '../types';
 import { getLocalDateKey, isCardDueToday } from './srsEngine';
+import { syncSingleCardToFirestore, syncStreakToFirestore } from './firestoreSync';
 
 const DECKS_KEY = 'synapse_formula_decks_v1';
 const CARDS_KEY = 'synapse_formula_cards_v1';
@@ -152,7 +153,13 @@ export const updateCardInStorage = (updatedCard: Flashcard): void => {
     cards.push(updatedCard);
   }
   saveStoredCards(cards);
-  evaluateAndRecordDailyStreak(cards);
+  const nextStreak = evaluateAndRecordDailyStreak(cards);
+  syncSingleCardToFirestore(updatedCard).catch(err =>
+    console.error('Background card Firestore sync failed:', err)
+  );
+  syncStreakToFirestore(nextStreak).catch(err =>
+    console.error('Background streak Firestore sync failed:', err)
+  );
 };
 
 /**

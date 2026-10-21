@@ -25,6 +25,12 @@ import { DueTodayHolder } from './components/DueTodayHolder';
 import { CalendarView } from './components/CalendarView';
 import { StreakAnalyticsView } from './components/StreakAnalyticsView';
 import { convertMcpPayloadToDeckAndCards } from './services/mcpService';
+import {
+  loadOrBootstrapUserFirestoreState,
+  syncDeckAndCardsToFirestore,
+  deleteDeckAndCardsFromFirestore,
+  deleteSingleCardFromFirestore,
+} from './services/firestoreSync';
 
 export default function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -125,7 +131,27 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = initAuth(
-      (currentUser) => setUser(currentUser),
+      async (currentUser) => {
+        setUser(currentUser);
+        try {
+          const localDecks = getStoredDecks();
+          const localCards = getStoredCards();
+          const localStreak = evaluateAndRecordDailyStreak(localCards);
+          const synced = await loadOrBootstrapUserFirestoreState(
+            localDecks,
+            localCards,
+            localStreak
+          );
+          const { updatedCards } = rolloverOverdueCardsFromPastDays(synced.cards);
+          setDecks(synced.decks);
+          setCards(updatedCards);
+          setStreak(evaluateAndRecordDailyStreak(updatedCards));
+          saveStoredDecks(synced.decks);
+          saveStoredCards(updatedCards);
+        } catch (err) {
+          console.error('Firestore cloud sync error:', err);
+        }
+      },
       () => setUser(null)
     );
     return () => {
@@ -155,10 +181,14 @@ export default function App() {
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
     setStreak(evaluateAndRecordDailyStreak(updatedCards));
+    syncDeckAndCardsToFirestore(newDeck, newCards).catch(err =>
+      console.error('Failed to persist deck to Firestore:', err)
+    );
     showToast(`Added ${newDeck.name}`);
   };
 
   const confirmDeleteDeck = (target: Deck) => {
+    const targetCardIds = cards.filter(c => c.deckId === target.id).map(c => c.id);
     const updatedDecks = decks.filter(d => d.id !== target.id);
     const updatedCards = cards.filter(c => c.deckId !== target.id);
     setDecks(updatedDecks);
@@ -166,6 +196,9 @@ export default function App() {
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
     setStreak(evaluateAndRecordDailyStreak(updatedCards));
+    deleteDeckAndCardsFromFirestore(target.id, targetCardIds).catch(err =>
+      console.error('Failed to delete deck from Firestore:', err)
+    );
     setDeckToDelete(null);
     if (browseDeck?.id === target.id) {
       setBrowseDeck(null);
@@ -312,6 +345,9 @@ export default function App() {
       saveStoredDecks(updatedDecks);
       saveStoredCards(updatedCards);
       setStreak(evaluateAndRecordDailyStreak(updatedCards));
+      syncDeckAndCardsToFirestore(updatedDeck, mergedCards).catch(err =>
+        console.error('Failed to persist refreshed deck to Firestore:', err)
+      );
 
       showToast(`Synced "${deck.name}" with Drive`);
     } catch (err: any) {
@@ -369,6 +405,9 @@ export default function App() {
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
     setStreak(evaluateAndRecordDailyStreak(updatedCards));
+    deleteSingleCardFromFirestore(cardId).catch(err =>
+      console.error('Failed to delete card from Firestore:', err)
+    );
     showToast('Formula removed', 2000);
   };
 

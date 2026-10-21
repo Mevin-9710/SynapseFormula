@@ -1,0 +1,283 @@
+{
+  "entities": {
+    "DeckRecord": {
+      "title": "DeckRecord",
+      "description": "Represents a formula flashcard deck owned by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns this deck.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display title of the formula deck.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "description": "Summary description of the deck.",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "cardsCount": {
+          "type": "integer",
+          "description": "Number of flashcards in this deck."
+        },
+        "syncIntervalHours": {
+          "type": "integer",
+          "description": "Cloud sync interval in hours."
+        },
+        "lastSyncedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last sync.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "googleDriveFileId": {
+          "type": "string",
+          "description": "Optional Google Drive file ID.",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "googleDriveFileName": {
+          "type": "string",
+          "description": "Optional Google Drive file name.",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "googleDriveMimeType": {
+          "type": "string",
+          "description": "Optional Google Drive MIME type.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "googleDriveModifiedTime": {
+          "type": "string",
+          "description": "Optional Google Drive modified timestamp.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when deck was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when deck was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "description",
+        "cardsCount",
+        "syncIntervalHours",
+        "lastSyncedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CardRecord": {
+      "title": "CardRecord",
+      "description": "Represents an individual formula flashcard with SRS state and variable definitions.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the card owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deckId": {
+          "type": "string",
+          "description": "ID of the parent DeckRecord.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "statement": {
+          "type": "string",
+          "description": "Physical law or mathematical prompt statement.",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "formula": {
+          "type": "string",
+          "description": "LaTeX formula expression.",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "repetitionStage": {
+          "type": "string",
+          "description": "Current active recall stage.",
+          "enum": ["statement", "cloze", "variables"]
+        },
+        "intervalDays": {
+          "type": "number",
+          "description": "SRS interval in days."
+        },
+        "easeFactor": {
+          "type": "number",
+          "description": "SM-2 ease factor multiplier."
+        },
+        "repetitionCount": {
+          "type": "integer",
+          "description": "Completed active recall repetitions."
+        },
+        "dueDate": {
+          "type": "string",
+          "description": "Next scheduled review ISO date string.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "state": {
+          "type": "string",
+          "description": "Card learning maturity state.",
+          "enum": ["new", "learning", "review", "mastered"]
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Optional intuition or boundary conditions.",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "category": {
+          "type": "string",
+          "description": "Optional topic category.",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "lastReviewedAt": {
+          "type": "string",
+          "description": "Optional ISO timestamp of last review.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "firstTimeReviewedAt": {
+          "type": "string",
+          "description": "Optional ISO timestamp of first-time walkthrough review.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "shiftedFromDate": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD date from which card rolled over.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "rolloverCount": {
+          "type": "integer",
+          "description": "Optional count of automatic daily rollovers."
+        },
+        "variableSymbols": {
+          "type": "array",
+          "description": "Bounded list of variable LaTeX symbols (max 20)."
+        },
+        "variableMeanings": {
+          "type": "array",
+          "description": "Bounded list of variable meanings (max 20)."
+        },
+        "variableUnits": {
+          "type": "array",
+          "description": "Bounded list of variable units (max 20)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when card was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when card was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "deckId",
+        "statement",
+        "formula",
+        "repetitionStage",
+        "intervalDays",
+        "easeFactor",
+        "repetitionCount",
+        "dueDate",
+        "state",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StreakRecord": {
+      "title": "StreakRecord",
+      "description": "Tracks consecutive daily due review streak for a user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "currentStreak": {
+          "type": "integer",
+          "description": "Current consecutive days streak."
+        },
+        "bestStreak": {
+          "type": "integer",
+          "description": "All-time highest streak."
+        },
+        "completedDates": {
+          "type": "array",
+          "description": "Bounded list of YYYY-MM-DD date strings (max 1000)."
+        },
+        "lastStudiedDate": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD last studied date.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when streak record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when streak record was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "currentStreak",
+        "bestStreak",
+        "completedDates",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/decks/{deckId}": {
+      "schema": "DeckRecord",
+      "description": "User formula decks persisted in Firestore."
+    },
+    "/cards/{cardId}": {
+      "schema": "CardRecord",
+      "description": "User formula flashcards persisted in Firestore."
+    },
+    "/user_streaks/{userId}": {
+      "schema": "StreakRecord",
+      "description": "User study streak state persisted in Firestore."
+    }
+  }
+}
