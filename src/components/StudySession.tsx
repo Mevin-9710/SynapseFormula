@@ -5,8 +5,10 @@ import {
   RotateCcw,
   PenTool,
   Eye,
+  EyeOff,
   Trash2,
   BookOpen,
+  ListTree,
 } from 'lucide-react';
 import {
   Deck,
@@ -79,6 +81,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
   });
 
   const [isRevealed, setIsRevealed] = useState<boolean>(mode === 'first-time');
+  const [isVariablesRevealed, setIsVariablesRevealed] = useState<boolean>(mode === 'first-time');
   const [activeStage, setActiveStage] = useState<CardStage>('statement');
   const [showScratchpad, setShowScratchpad] = useState(false);
   const [revealedCloze, setRevealedCloze] = useState(false);
@@ -93,6 +96,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
 
   const currentCard = queue[currentIndex];
   const totalCardsInSession = queue.length;
+  const hasVariables = Boolean(currentCard?.variables && currentCard.variables.length > 0);
 
   const currentCardDeckName = useMemo(() => {
     if (!currentCard) return deck.name;
@@ -129,6 +133,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
         setCurrentIndex(nextQueue.length - 1);
       }
       setIsRevealed(mode === 'first-time');
+      setIsVariablesRevealed(mode === 'first-time');
       setActiveStage('statement');
     }
   };
@@ -159,6 +164,8 @@ export const StudySession: React.FC<StudySessionProps> = ({
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         if (!isRevealed) setIsRevealed(true);
+      } else if (e.key === 'v' || e.key === 'V') {
+        setIsVariablesRevealed(prev => !prev);
       } else if (e.key === 's' || e.key === 'S') {
         setShowScratchpad(prev => !prev);
       } else if (e.key === 'f' || e.key === 'F' || e.key === '0') {
@@ -216,6 +223,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
       setQueue(nextQueue);
       setCurrentIndex(prev => prev + 1);
       setIsRevealed(mode === 'first-time');
+      setIsVariablesRevealed(mode === 'first-time');
       setActiveStage('statement');
       setRevealedCloze(false);
       setSelectedClozeOption(null);
@@ -237,6 +245,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
     setQueue(freshList);
     setCurrentIndex(0);
     setIsRevealed(mode === 'first-time');
+    setIsVariablesRevealed(mode === 'first-time');
     setActiveStage('statement');
     setRevealedCloze(false);
     setSelectedClozeOption(null);
@@ -389,7 +398,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
           {/* Formula Stage (if revealed) */}
           {isRevealed && (
             <div className="space-y-3 pt-2 border-t border-black/5 animate-in fade-in duration-150">
-              {/* Minimal segmented control for stage */}
+              {/* Minimal segmented control for Formula vs Cloze drill */}
               <div className="flex items-center justify-center bg-black/5 p-1 rounded-xl text-xs">
                 <button
                   onClick={() => setActiveStage('statement')}
@@ -407,16 +416,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
                 >
                   Cloze (?)
                 </button>
-                {currentCard.variables && currentCard.variables.length > 0 && (
-                  <button
-                    onClick={() => setActiveStage('variables')}
-                    className={`flex-1 py-1.5 rounded-lg text-center font-medium cursor-pointer ${
-                      activeStage === 'variables' ? 'bg-white text-black font-bold shadow-xs' : 'text-black/50'
-                    }`}
-                  >
-                    Variables
-                  </button>
-                )}
               </div>
 
               {/* View 1: Formula */}
@@ -482,10 +481,38 @@ export const StudySession: React.FC<StudySessionProps> = ({
                   )}
                 </div>
               )}
+            </div>
+          )}
 
-              {/* View 3: Variables & Units */}
-              {activeStage === 'variables' && (
-                <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+          {/* Separate Dedicated Button to Reveal What Each Variable Means */}
+          {hasVariables && (
+            <div className="pt-2 border-t border-black/5 space-y-2.5">
+              <button
+                type="button"
+                onClick={() => setIsVariablesRevealed(prev => !prev)}
+                className={`w-full h-10 rounded-xl px-3 text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors ${
+                  isVariablesRevealed
+                    ? 'bg-black text-white'
+                    : 'glass-button text-black hover:border-black/30'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <ListTree className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {isVariablesRevealed
+                      ? 'Hide Variable Meanings'
+                      : `Reveal Variable Meanings (${currentCard.variables!.length})`}
+                  </span>
+                </span>
+                {isVariablesRevealed ? (
+                  <EyeOff className="w-3.5 h-3.5 opacity-70" />
+                ) : (
+                  <Eye className="w-3.5 h-3.5 opacity-70" />
+                )}
+              </button>
+
+              {isVariablesRevealed && (
+                <div className="space-y-2 animate-in fade-in duration-150">
                   {currentCard.variables?.map((v, i) => (
                     <div
                       key={i}
@@ -512,7 +539,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
           )}
 
           {!isRevealed && (
-            <div className="text-center text-[11px] text-black/40 pt-2">
+            <div className="text-center text-[11px] text-black/40 pt-1">
               Tap bottom button to reveal formula
             </div>
           )}

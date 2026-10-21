@@ -291,11 +291,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   </button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {deckCards.map((card, i) => (
                     <div
                       key={card.id}
-                      className="p-2.5 rounded-lg bg-white/95 border border-black/5 space-y-1"
+                      className="p-2.5 rounded-lg bg-white/95 border border-black/5 space-y-0.5"
                     >
                       <div className="flex items-center justify-between text-[10px] text-black/45 tabular-nums">
                         <span>
@@ -306,9 +306,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       <p className="text-xs font-semibold text-black leading-snug">
                         {card.statement}
                       </p>
-                      <div className="py-1 px-2 rounded bg-black/[0.02] overflow-x-auto">
-                        <FormulaDisplay formula={card.formula} displayMode={false} size="xs" />
-                      </div>
                     </div>
                   ))}
                 </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
 import { Plus, CheckCircle2, Trash2, HelpCircle } from 'lucide-react';
-import { Deck, Flashcard, StudySessionMode, DeckSessionState } from './types';
+import { Deck, Flashcard, StudySessionMode, DeckSessionState, StudyStreakState } from './types';
 import {
   getStoredDecks,
   saveStoredDecks,
@@ -9,6 +9,7 @@ import {
   saveStoredCards,
   getDueTodaySessionState,
   rolloverOverdueCardsFromPastDays,
+  evaluateAndRecordDailyStreak,
 } from './services/storage';
 import { isCardDueToday } from './services/srsEngine';
 import { initAuth, googleSignIn, logout, getAccessToken } from './services/auth';
@@ -19,7 +20,6 @@ import { DeckCard } from './components/DeckCard';
 import { StudySession } from './components/StudySession';
 import { DrivePickerModal } from './components/DrivePickerModal';
 import { FormulaBrowserModal } from './components/FormulaBrowserModal';
-import { Scratchpad } from './components/Scratchpad';
 import { ExcelGuideModal } from './components/ExcelGuideModal';
 import { DueTodayHolder } from './components/DueTodayHolder';
 import { CalendarView } from './components/CalendarView';
@@ -28,6 +28,11 @@ export default function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [dueSessionState, setDueSessionState] = useState<DeckSessionState | undefined>(undefined);
+  const [streak, setStreak] = useState<StudyStreakState>({
+    currentStreak: 0,
+    bestStreak: 0,
+    completedDates: [],
+  });
   const [user, setUser] = useState<User | null>(null);
 
   const [currentView, setCurrentView] = useState<NavView>('decks');
@@ -53,7 +58,7 @@ export default function App() {
     setTimeout(() => setSyncToast(null), durationMs);
   };
 
-  // Load decks & cards and automatically shift unfinished past due cards to the new day
+  // Load decks & cards, automatically shift unfinished past due cards, and evaluate streak
   useEffect(() => {
     const loadedDecks = getStoredDecks();
     const loadedCards = getStoredCards();
@@ -62,6 +67,7 @@ export default function App() {
     setDecks(loadedDecks);
     setCards(updatedCards);
     setDueSessionState(getDueTodaySessionState());
+    setStreak(evaluateAndRecordDailyStreak(updatedCards));
   }, []);
 
   // Automatic background rollover check when the day ends
@@ -72,6 +78,7 @@ export default function App() {
       if (shiftedCount > 0) {
         setCards(updatedCards);
       }
+      setStreak(evaluateAndRecordDailyStreak(updatedCards));
     }, 60 * 1000);
     return () => clearInterval(interval);
   }, []);
@@ -107,6 +114,7 @@ export default function App() {
     setCards(updatedCards);
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
+    setStreak(evaluateAndRecordDailyStreak(updatedCards));
     showToast(`Added ${newDeck.name}`);
   };
 
@@ -117,6 +125,7 @@ export default function App() {
     setCards(updatedCards);
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
+    setStreak(evaluateAndRecordDailyStreak(updatedCards));
     setDeckToDelete(null);
     if (browseDeck?.id === target.id) {
       setBrowseDeck(null);
@@ -262,6 +271,7 @@ export default function App() {
       setCards(updatedCards);
       saveStoredDecks(updatedDecks);
       saveStoredCards(updatedCards);
+      setStreak(evaluateAndRecordDailyStreak(updatedCards));
 
       showToast(`Synced "${deck.name}" with Drive`);
     } catch (err: any) {
@@ -318,6 +328,7 @@ export default function App() {
     setCards(updatedCards);
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
+    setStreak(evaluateAndRecordDailyStreak(updatedCards));
     showToast('Formula removed', 2000);
   };
 
@@ -333,10 +344,12 @@ export default function App() {
           resumeFromSession={resumeMode}
           initialCardIndex={initialCardIndex}
           onExit={() => {
+            const latestCards = getStoredCards();
             setActiveStudyDeck(null);
             setDecks(getStoredDecks());
-            setCards(getStoredCards());
+            setCards(latestCards);
             setDueSessionState(getDueTodaySessionState());
+            setStreak(evaluateAndRecordDailyStreak(latestCards));
           }}
           onDeleteCard={handleDeleteCard}
         />
@@ -357,6 +370,7 @@ export default function App() {
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
         dueCount={dueCardsTotal.length}
+        streak={streak}
         isSyncingAll={isSyncingAll}
         onSyncAll={handleSyncAllDecks}
       />
@@ -475,21 +489,6 @@ export default function App() {
             cards={cards}
             onStartContinuousCards={handleStartContinuousCustomCards}
           />
-        )}
-
-        {/* VIEW 4: SCRATCHPAD */}
-        {currentView === 'scratchpad' && (
-          <div className="space-y-3">
-            <div className="py-1">
-              <h2 className="text-lg font-bold text-black tracking-tight">
-                Formula Scratchpad
-              </h2>
-              <p className="text-xs text-black/50">
-                Write or type equations to test recall
-              </p>
-            </div>
-            <Scratchpad className="h-[420px]" />
-          </div>
         )}
       </main>
 

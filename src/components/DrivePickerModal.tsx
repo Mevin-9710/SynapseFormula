@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, FileSpreadsheet, RefreshCw, Upload, AlertCircle, ArrowRight, Download, HelpCircle, BookOpen } from 'lucide-react';
 import { listDriveExcelFiles, fetchDriveFileBinary } from '../services/drive';
-import { parseWorkbookSummary, convertRowsToFlashcards, downloadSampleExcelTemplate, downloadSampleCsvTemplate } from '../services/excelParser';
+import { parseWorkbookSummary, convertRowsToFlashcards, downloadSampleExcelTemplate, downloadSampleCsvTemplate, extractRowVariables } from '../services/excelParser';
 import { googleSignIn, getAccessToken } from '../services/auth';
 import { Deck, DriveFileItem, ColumnMapping } from '../types';
 import { FormulaDisplay } from './FormulaDisplay';
@@ -496,21 +496,40 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               </div>
 
               {/* Stacked Preview for 9:16 mobile viewports */}
-              {parsedSummary?.sampleRows && parsedSummary.sampleRows.length > 0 && (
-                <div className="space-y-1.5 pt-2">
-                  <span className="text-[10px] text-black/50 uppercase font-bold block">
-                    Card Preview (Row 1)
-                  </span>
-                  <div className="p-3 rounded-xl bg-white border border-black/10 space-y-1.5 shadow-2xs">
-                    <p className="font-bold text-black break-words leading-snug">
-                      {parsedSummary.sampleRows[0][mapping.statementCol] || 'No statement selected'}
-                    </p>
-                    <div className="py-1 px-2 rounded-lg bg-black/[0.03] text-center overflow-x-auto">
-                      <FormulaDisplay formula={parsedSummary.sampleRows[0][mapping.formulaCol] || ''} size="sm" />
+              {parsedSummary?.sampleRows && parsedSummary.sampleRows.length > 0 && (() => {
+                const sampleVars = extractRowVariables(parsedSummary.sampleRows[0], mapping);
+                return (
+                  <div className="space-y-1.5 pt-2">
+                    <span className="text-[10px] text-black/50 uppercase font-bold block">
+                      Card Preview (Row 1)
+                    </span>
+                    <div className="p-3 rounded-xl bg-white border border-black/10 space-y-2 shadow-2xs">
+                      <p className="font-bold text-black break-words leading-snug">
+                        {parsedSummary.sampleRows[0][mapping.statementCol] || 'No statement selected'}
+                      </p>
+                      <div className="py-1 px-2 rounded-lg bg-black/[0.03] text-center overflow-x-auto">
+                        <FormulaDisplay formula={parsedSummary.sampleRows[0][mapping.formulaCol] || ''} size="sm" />
+                      </div>
+                      {sampleVars.length > 0 && (
+                        <div className="pt-1.5 border-t border-black/5 space-y-1">
+                          <span className="text-[10px] font-semibold text-black/50 block">
+                            Detected Variable Meanings ({sampleVars.length}):
+                          </span>
+                          {sampleVars.map((v, idx) => (
+                            <div key={idx} className="text-[11px] flex items-baseline gap-1.5 text-black/80">
+                              <span className="font-bold text-black shrink-0">
+                                <FormulaDisplay formula={v.symbol} displayMode={false} size="xs" />
+                              </span>
+                              <span>— {v.meaning}</span>
+                              {v.unit && <span className="text-[10px] text-black/50 font-mono">[{v.unit}]</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
           )}
         </div>

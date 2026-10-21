@@ -1,9 +1,100 @@
-import { Deck, Flashcard, DeckSessionState, StudySessionMode } from '../types';
+import { Deck, Flashcard, DeckSessionState, StudySessionMode, StudyStreakState } from '../types';
 import { getLocalDateKey, isCardDueToday } from './srsEngine';
 
 const DECKS_KEY = 'synapse_formula_decks_v1';
 const CARDS_KEY = 'synapse_formula_cards_v1';
 const DUE_SESSION_KEY = 'synapse_formula_due_session_v1';
+const STREAK_KEY = 'synapse_formula_streak_v1';
+
+export const calculateConsecutiveStreak = (completedDates: string[]): number => {
+  const dateSet = new Set(completedDates);
+  const now = new Date();
+  const todayKey = getLocalDateKey(now);
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const yesterdayKey = getLocalDateKey(yesterday);
+
+  let cursor: Date;
+  if (dateSet.has(todayKey)) {
+    cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  } else if (dateSet.has(yesterdayKey)) {
+    cursor = yesterday;
+  } else {
+    return 0;
+  }
+
+  let streak = 0;
+  while (dateSet.has(getLocalDateKey(cursor))) {
+    streak += 1;
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 1);
+  }
+  return streak;
+};
+
+export const getStudyStreakState = (): StudyStreakState => {
+  try {
+    const raw = localStorage.getItem(STREAK_KEY);
+    if (!raw) {
+      return {
+        currentStreak: 0,
+        bestStreak: 0,
+        completedDates: [],
+      };
+    }
+    const parsed: StudyStreakState = JSON.parse(raw);
+    const completedDates = Array.from(new Set(parsed.completedDates || [])).sort();
+    const currentStreak = calculateConsecutiveStreak(completedDates);
+    const bestStreak = Math.max(parsed.bestStreak || 0, currentStreak);
+    return {
+      currentStreak,
+      bestStreak,
+      completedDates,
+      lastStudiedDate: parsed.lastStudiedDate,
+    };
+  } catch {
+    return {
+      currentStreak: 0,
+      bestStreak: 0,
+      completedDates: [],
+    };
+  }
+};
+
+export const saveStudyStreakState = (state: StudyStreakState): void => {
+  try {
+    localStorage.setItem(STREAK_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.error('Error saving study streak state:', err);
+  }
+};
+
+export const evaluateAndRecordDailyStreak = (allCards: Flashcard[]): StudyStreakState => {
+  const streakState = getStudyStreakState();
+  const todayKey = getLocalDateKey(new Date());
+
+  const reviewedToday = allCards.some(
+    c => c.lastReviewedAt && getLocalDateKey(c.lastReviewedAt) === todayKey
+  );
+  const remainingDueToday = allCards.filter(c => isCardDueToday(c)).length;
+
+  const completedSet = new Set(streakState.completedDates);
+  if (allCards.length > 0 && remainingDueToday === 0 && reviewedToday) {
+    completedSet.add(todayKey);
+  }
+
+  const completedDates = Array.from(completedSet).sort();
+  const currentStreak = calculateConsecutiveStreak(completedDates);
+  const bestStreak = Math.max(streakState.bestStreak || 0, currentStreak);
+
+  const nextState: StudyStreakState = {
+    currentStreak,
+    bestStreak,
+    completedDates,
+    lastStudiedDate: reviewedToday ? todayKey : streakState.lastStudiedDate,
+  };
+
+  saveStudyStreakState(nextState);
+  return nextState;
+};
 
 export const getStoredDecks = (): Deck[] => {
   try {
@@ -61,6 +152,7 @@ export const updateCardInStorage = (updatedCard: Flashcard): void => {
     cards.push(updatedCard);
   }
   saveStoredCards(cards);
+  evaluateAndRecordDailyStreak(cards);
 };
 
 /**

@@ -9,6 +9,13 @@ export type CardState = 'new' | 'learning' | 'review' | 'mastered';
 export type SrsRating = 'first-time' | 'again' | 'hard' | 'good' | 'easy';
 export type StudySessionMode = 'recall' | 'first-time' | 'due-continuous';
 
+export interface StudyStreakState {
+  currentStreak: number;
+  bestStreak: number;
+  completedDates: string[]; // Array of YYYY-MM-DD local date keys where due reviews were completed
+  lastStudiedDate?: string; // YYYY-MM-DD
+}
+
 export interface Flashcard {
   id: string;
   deckId: string;

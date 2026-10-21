@@ -159,14 +159,20 @@ export const ExcelGuideModal: React.FC<ExcelGuideModalProps> = ({ isOpen, onClos
                 </p>
               </div>
 
-              <div className="p-2.5 rounded-xl bg-white border border-black/10 space-y-1">
+              <div className="p-2.5 rounded-xl bg-white border border-black/10 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-black">Variables</span>
-                  <span className="text-[10px] text-black/40">Optional (for Stage 3)</span>
+                  <span className="font-bold text-black">Variable_1, Variable_2, ... (or Variables)</span>
+                  <span className="text-[10px] font-semibold text-black/60 bg-black/5 px-1.5 py-0.5 rounded">Included in Template</span>
                 </div>
-                <p className="text-black/60 text-[11px]">
-                  Semicolon-separated definitions: <br />
-                  <code className="font-mono text-black bg-black/5 px-1 rounded">F : Force [N]; m : Mass [kg]; a : Accel [m/s^2]</code>
+                <p className="text-black/60 text-[11px] leading-relaxed">
+                  Add what each variable means in dedicated columns (<code className="font-mono text-black bg-black/5 px-1 rounded">Variable_1</code>, <code className="font-mono text-black bg-black/5 px-1 rounded">Variable_2</code>, <code className="font-mono text-black bg-black/5 px-1 rounded">Variable_3</code>, etc.):<br />
+                  <code className="font-mono text-black bg-black/5 px-1 rounded block mt-1">
+                    \vec{'{F}'} : Net external force [N]
+                  </code>
+                  Or put them all in a single <code className="font-mono text-black bg-black/5 px-1 rounded">Variables</code> column separated by semicolons:<br />
+                  <code className="font-mono text-black bg-black/5 px-1 rounded block mt-1">
+                    F : Force [N]; m : Mass [kg]; a : Accel [m/s^2]
+                  </code>
                 </p>
               </div>
 

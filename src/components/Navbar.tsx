@@ -1,8 +1,19 @@
-import React from 'react';
-import { Layers, CheckCircle2, Calendar, PenTool, Plus, LogOut, RefreshCw } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import {
+  Layers,
+  CheckCircle2,
+  Calendar,
+  Plus,
+  LogOut,
+  RefreshCw,
+  Flame,
+  Trophy,
+} from 'lucide-react';
 import { User } from 'firebase/auth';
+import { StudyStreakState } from '../types';
+import { getLocalDateKey } from '../services/srsEngine';
 
-export type NavView = 'decks' | 'due' | 'calendar' | 'scratchpad';
+export type NavView = 'decks' | 'due' | 'calendar';
 
 interface NavbarProps {
   currentView: NavView;
@@ -12,6 +23,7 @@ interface NavbarProps {
   onSignIn: () => void;
   onSignOut: () => void;
   dueCount?: number;
+  streak?: StudyStreakState;
   isSyncingAll?: boolean;
   onSyncAll?: () => void;
 }
@@ -24,24 +36,130 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSignIn,
   onSignOut,
   dueCount = 0,
+  streak = { currentStreak: 0, bestStreak: 0, completedDates: [] },
   isSyncingAll = false,
   onSyncAll,
 }) => {
+  const [showStreakDetails, setShowStreakDetails] = useState(false);
+
+  const todayKey = useMemo(() => getLocalDateKey(new Date()), []);
+  const completedToday = streak.completedDates.includes(todayKey);
+
+  // Build last 7 days for the mini streak tracker
+  const last7Days = useMemo(() => {
+    const days: Array<{ label: string; dateKey: string; done: boolean; isToday: boolean }> = [];
+    const now = new Date();
+    const shortLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const key = getLocalDateKey(d);
+      days.push({
+        label: shortLabels[d.getDay()],
+        dateKey: key,
+        done: streak.completedDates.includes(key),
+        isToday: i === 0,
+      });
+    }
+    return days;
+  }, [streak.completedDates]);
+
   return (
     <>
       {/* Compact Top Bar */}
       <header className="sticky top-0 z-40 w-full glass-panel border-b border-black/10 px-4 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center text-xs font-bold shadow-xs">
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center text-xs font-bold shadow-xs shrink-0">
               ∑
             </div>
-            <span className="font-bold text-sm tracking-tight text-black whitespace-nowrap">
+            <span className="font-bold text-sm tracking-tight text-black whitespace-nowrap truncate">
               SynapseFormula
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Gamified Study Streak Indicator */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowStreakDetails(prev => !prev)}
+                title="Consecutive days of completed due flashcard reviews"
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 min-h-[40px] border transition-all cursor-pointer tabular-nums ${
+                  completedToday
+                    ? 'bg-amber-50 border-amber-300 text-orange-600 shadow-2xs'
+                    : streak.currentStreak > 0
+                    ? 'bg-orange-50/70 border-amber-200 text-amber-700'
+                    : 'glass-button text-slate-600'
+                }`}
+              >
+                <Flame
+                  className={`w-4 h-4 shrink-0 ${
+                    completedToday
+                      ? 'text-orange-500 fill-amber-400'
+                      : streak.currentStreak > 0
+                      ? 'text-amber-500 fill-amber-200'
+                      : 'text-amber-500/70'
+                  }`}
+                />
+                <span>{streak.currentStreak}</span>
+                <span className="hidden sm:inline text-[11px] font-semibold">
+                  {streak.currentStreak === 1 ? 'Day' : 'Days'}
+                </span>
+              </button>
+
+              {showStreakDetails && (
+                <div className="absolute right-0 mt-2 w-68 rounded-2xl glass-card bg-white/95 border border-black/10 shadow-xl p-3.5 z-50 space-y-3 animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 text-orange-600 flex items-center justify-center">
+                        <Flame className="w-4 h-4 fill-amber-400 text-orange-500" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-black">
+                          {streak.currentStreak} {streak.currentStreak === 1 ? 'Day' : 'Days'} Streak
+                        </p>
+                        <p className="text-[10px] text-black/55">
+                          {completedToday
+                            ? 'Today’s due reviews complete!'
+                            : dueCount > 0
+                            ? `Finish ${dueCount} due today to extend`
+                            : 'Review formulas to start streak'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600">
+                        <Trophy className="w-3 h-3 text-amber-500" />
+                        Best: {streak.bestStreak}d
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 7-Day Activity Strip */}
+                  <div className="grid grid-cols-7 gap-1 pt-2 border-t border-black/5 text-center">
+                    {last7Days.map(day => (
+                      <div key={day.dateKey} className="flex flex-col items-center gap-1">
+                        <span className="text-[9px] font-semibold text-black/45">
+                          {day.label}
+                        </span>
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                            day.done
+                              ? 'bg-emerald-500 text-white shadow-2xs'
+                              : day.isToday
+                              ? 'border border-amber-400 bg-amber-50 text-amber-700'
+                              : 'bg-black/5 text-black/30'
+                          }`}
+                        >
+                          {day.done ? '✓' : '·'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {onSyncAll && (
               <button
                 onClick={onSyncAll}
@@ -80,9 +198,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </header>
 
-      {/* Pinned Bottom Thumb Navigation Bar (Natural Reach Zone) */}
+      {/* Pinned Bottom Thumb Navigation Bar (4 Tabs: Decks, Due, Calendar, + Import) */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 glass-panel border-t border-black/10 pb-safe">
-        <div className="max-w-lg mx-auto grid grid-cols-5 items-center h-16 px-1">
+        <div className="max-w-md mx-auto grid grid-cols-4 items-center h-16 px-2">
           {/* Tab 1: Decks (Home Dashboard) */}
           <button
             onClick={() => onSelectView('decks')}
@@ -123,18 +241,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Calendar</span>
           </button>
 
-          {/* Tab 4: Scratchpad */}
-          <button
-            onClick={() => onSelectView('scratchpad')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-colors cursor-pointer ${
-              currentView === 'scratchpad' ? 'text-black font-bold' : 'text-black/40 hover:text-black'
-            }`}
-          >
-            <PenTool className="w-5 h-5" />
-            <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Scratch</span>
-          </button>
-
-          {/* Tab 5: Add Excel */}
+          {/* Tab 4: Add Excel */}
           <button
             onClick={onOpenConnectModal}
             className="flex flex-col items-center justify-center h-full min-h-[44px] text-black hover:text-black/80 transition-colors cursor-pointer"

@@ -51,7 +51,7 @@ export const autoDetectColumns = (headers: string[]): ColumnMapping => {
   };
 
   const statementCol = findMatch([
-    'statement', 'concept', 'question', 'law', 'principle', 'theorem', 
+    'statement', 'concept', 'question', 'law', 'principle', 'theorem',
     'topic', 'name', 'title', 'condition', 'prompt', 'front'
   ]) || (headers[0] || '');
 
@@ -60,11 +60,11 @@ export const autoDetectColumns = (headers: string[]): ColumnMapping => {
   ]) || (headers[1] || headers[0] || '');
 
   const variablesCol = findMatch([
-    'variables', 'variable', 'symbols', 'parameters', 'legend', 'notation', 'terms'
+    'variables', 'variablemeaning', 'variablemeanings', 'variable', 'symbols', 'parameters', 'legend', 'notation', 'terms'
   ]);
 
   const explanationCol = findMatch([
-    'explanation', 'derivation', 'notes', 'note', 'details', 'description', 'meaning'
+    'explanation', 'derivation', 'notes', 'note', 'details', 'description'
   ]);
 
   const categoryCol = findMatch([
@@ -83,11 +83,10 @@ export const autoDetectColumns = (headers: string[]): ColumnMapping => {
 export const parseVariablesString = (raw: string | undefined): VariableDefinition[] => {
   if (!raw || typeof raw !== 'string') return [];
   const entries = raw.split(/[\n;•|]+/).map(s => s.trim()).filter(Boolean);
-  
+
   const definitions: VariableDefinition[] = [];
   for (const entry of entries) {
     // Matches "Symbol : Meaning [Unit]" or "Symbol = Meaning (Unit)"
-    // Supports LaTeX symbols like "\Delta x", "\vec{F}", "m_1, m_2", "\hbar", etc.
     const match = entry.match(/^([^:=–—\n]+?)\s*(?:=|:|–|—)\s*(.*?)(?:\[(.*?)\]|\((.*?)\)|$)/);
     if (match) {
       const symbol = match[1].trim();
@@ -95,7 +94,6 @@ export const parseVariablesString = (raw: string | undefined): VariableDefinitio
       const unit = (match[3] || match[4] || '').trim();
       definitions.push({ symbol, meaning, unit: unit || undefined });
     } else {
-      // Fallback: simple colon/dash/equals split
       const parts = entry.split(/[:=–—]/);
       if (parts.length >= 2) {
         definitions.push({
@@ -112,6 +110,57 @@ export const parseVariablesString = (raw: string | undefined): VariableDefinitio
   }
 
   return definitions;
+};
+
+/**
+ * Extracts all variable definitions from a row:
+ * - Reads the mapped `variablesCol` (e.g. "Variables" or "Variable Meanings")
+ * - Also automatically reads dedicated columns like Variable_1, Variable_2, Variable_3, Variable 1, Var 1, etc.
+ */
+export const extractRowVariables = (
+  row: Record<string, any>,
+  mapping: ColumnMapping
+): VariableDefinition[] => {
+  const combinedRawParts: string[] = [];
+
+  if (mapping.variablesCol && row[mapping.variablesCol]) {
+    combinedRawParts.push(String(row[mapping.variablesCol]));
+  }
+
+  // Also scan any individual Variable_1, Variable_2, ... or Variable Meaning columns
+  for (const [colKey, val] of Object.entries(row)) {
+    if (
+      colKey === mapping.statementCol ||
+      colKey === mapping.formulaCol ||
+      colKey === mapping.variablesCol ||
+      colKey === mapping.explanationCol ||
+      colKey === mapping.categoryCol
+    ) {
+      continue;
+    }
+
+    const cleanKey = colKey.trim().toLowerCase();
+    const isVariableCol =
+      /^var(iable)?[\s_-]*\d+/i.test(cleanKey) ||
+      /^symbol[\s_-]*\d+/i.test(cleanKey) ||
+      cleanKey.includes('variable') ||
+      cleanKey.includes('symbol meaning');
+
+    if (isVariableCol && val !== undefined && val !== null && String(val).trim() !== '') {
+      combinedRawParts.push(String(val).trim());
+    }
+  }
+
+  const parsed = parseVariablesString(combinedRawParts.join(' ; '));
+
+  // Deduplicate by symbol + meaning
+  const seen = new Set<string>();
+  return parsed.filter(v => {
+    const key = `${v.symbol}::${v.meaning}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
 export const convertRowsToFlashcards = (
@@ -139,11 +188,10 @@ export const convertRowsToFlashcards = (
     .map((row, index) => {
       const statement = String(row[mapping.statementCol] || `Formula #${index + 1}`).trim();
       const formula = String(row[mapping.formulaCol] || '').trim();
-      const rawVars = mapping.variablesCol ? String(row[mapping.variablesCol] || '') : '';
       const explanation = mapping.explanationCol ? String(row[mapping.explanationCol] || '') : '';
       const category = mapping.categoryCol ? String(row[mapping.categoryCol] || 'Physics') : 'Physics';
+      const variables = extractRowVariables(row, mapping);
 
-      // Hash-based or row-based ID
       const cardId = `card_${deckId}_${index + 1}_${Math.abs(hashString(statement + formula))}`;
 
       return {
@@ -151,7 +199,7 @@ export const convertRowsToFlashcards = (
         deckId,
         statement,
         formula,
-        variables: parseVariablesString(rawVars),
+        variables,
         explanation: explanation || undefined,
         category: category || undefined,
         repetitionStage: 'statement',
@@ -177,59 +225,94 @@ const SAMPLE_FORMULA_ROWS = [
   {
     Statement: "Newton's Second Law of Motion",
     Formula: "\\vec{F} = m \\vec{a}",
-    Variables: "F : Net force [N]; m : Mass [kg]; a : Acceleration [m/s^2]",
+    Variable_1: "\\vec{F} : Net external force vector [N]",
+    Variable_2: "m : Inertial mass of the object [kg]",
+    Variable_3: "\\vec{a} : Linear acceleration vector [m/s^2]",
+    Variable_4: "",
+    Variable_5: "",
+    Variables: "\\vec{F} : Net external force vector [N]; m : Inertial mass of the object [kg]; \\vec{a} : Linear acceleration vector [m/s^2]",
     Explanation: "Fundamental relation between net external force and linear acceleration.",
-    Category: "Mechanics"
+    Category: "Mechanics",
   },
   {
     Statement: "Total Lorentz Force on a charged particle",
     Formula: "\\vec{F} = q(\\vec{E} + \\vec{v} \\times \\vec{B})",
-    Variables: "\\vec{F} : Total Lorentz force [N]; q : Electric charge [C]; \\vec{E} : Electric field [V/m]; \\vec{v} : Velocity [m/s]; \\vec{B} : Magnetic field [T]",
+    Variable_1: "\\vec{F} : Total Lorentz electromagnetic force [N]",
+    Variable_2: "q : Electric charge of the particle [C]",
+    Variable_3: "\\vec{E} : Electric field vector [V/m]",
+    Variable_4: "\\vec{v} : Instantaneous particle velocity [m/s]",
+    Variable_5: "\\vec{B} : Magnetic flux density field [T]",
+    Variables: "\\vec{F} : Total Lorentz electromagnetic force [N]; q : Electric charge [C]; \\vec{E} : Electric field [V/m]; \\vec{v} : Velocity [m/s]; \\vec{B} : Magnetic field [T]",
     Explanation: "Combines electrostatic and magnetic components. Magnetic force is perpendicular to velocity and does zero work.",
-    Category: "Electromagnetism"
+    Category: "Electromagnetism",
   },
   {
     Statement: "Newton's Universal Law of Gravitation",
     Formula: "F_g = G \\frac{m_1 m_2}{r^2}",
-    Variables: "F_g : Attractive gravitational force [N]; G : Gravitational constant [N*m^2/kg^2]; m_1, m_2 : Point masses [kg]; r : Distance [m]",
+    Variable_1: "F_g : Attractive gravitational force [N]",
+    Variable_2: "G : Universal gravitational constant [6.674 \\times 10^{-11} N\\cdot m^2/kg^2]",
+    Variable_3: "m_1, m_2 : Interacting point masses [kg]",
+    Variable_4: "r : Center-to-center separation distance [m]",
+    Variable_5: "",
+    Variables: "F_g : Attractive gravitational force [N]; G : Gravitational constant [N*m^2/kg^2]; m_1, m_2 : Point masses [kg]; r : Separation distance [m]",
     Explanation: "Inverse-square attractive force between any two point masses.",
-    Category: "Gravitation"
+    Category: "Gravitation",
   },
   {
     Statement: "Kinetic Energy in terms of linear momentum",
     Formula: "E_k = \\frac{p^2}{2m}",
+    Variable_1: "E_k : Translational kinetic energy [J]",
+    Variable_2: "p : Linear momentum (p = mv) [kg\\cdot m/s]",
+    Variable_3: "m : Mass of the moving body [kg]",
+    Variable_4: "",
+    Variable_5: "",
     Variables: "E_k : Kinetic energy [J]; p : Linear momentum [kg*m/s]; m : Mass [kg]",
     Explanation: "Direct relation between mechanical energy and linear momentum.",
-    Category: "Mechanics"
+    Category: "Mechanics",
   },
   {
     Statement: "Heisenberg Uncertainty Principle",
     Formula: "\\Delta x \\cdot \\Delta p \\ge \\frac{\\hbar}{2}",
+    Variable_1: "\\Delta x : Uncertainty in position measurement [m]",
+    Variable_2: "\\Delta p : Uncertainty in momentum measurement [kg\\cdot m/s]",
+    Variable_3: "\\hbar : Reduced Planck constant (h / 2\\pi) [J\\cdot s]",
+    Variable_4: "",
+    Variable_5: "",
     Variables: "\\Delta x : Position uncertainty [m]; \\Delta p : Momentum uncertainty [kg*m/s]; \\hbar : Reduced Planck constant [J*s]",
     Explanation: "Quantum mechanical limit arising from non-commuting operators.",
-    Category: "Quantum Physics"
+    Category: "Quantum Physics",
   },
   {
     Statement: "Ideal Gas Law (Plain text formula example)",
     Formula: "P * V = n * R * T",
+    Variable_1: "P : Absolute gas pressure [Pa]",
+    Variable_2: "V : Contained gas volume [m^3]",
+    Variable_3: "n : Amount of gas substance [mol]",
+    Variable_4: "R : Universal ideal gas constant [8.314 J/(mol\\cdot K)]",
+    Variable_5: "T : Absolute thermodynamic temperature [K]",
     Variables: "P : Absolute pressure [Pa]; V : Volume [m^3]; n : Amount of substance [mol]; R : Universal gas constant [J/(mol*K)]; T : Temperature [K]",
-    Explanation: "Equation of state of a hypothetical ideal gas. Works with plain-text operators without LaTeX too!",
-    Category: "Thermodynamics"
-  }
+    Explanation: "Equation of state of a hypothetical ideal gas.",
+    Category: "Thermodynamics",
+  },
 ];
 
 export const downloadSampleExcelTemplate = () => {
   const ws = XLSX.utils.json_to_sheet(SAMPLE_FORMULA_ROWS);
   ws['!cols'] = [
-    { wch: 38 },
-    { wch: 32 },
-    { wch: 55 },
-    { wch: 45 },
-    { wch: 20 },
+    { wch: 36 }, // Statement
+    { wch: 30 }, // Formula
+    { wch: 38 }, // Variable_1
+    { wch: 38 }, // Variable_2
+    { wch: 38 }, // Variable_3
+    { wch: 38 }, // Variable_4
+    { wch: 38 }, // Variable_5
+    { wch: 55 }, // Variables (combined optional)
+    { wch: 45 }, // Explanation
+    { wch: 18 }, // Category
   ];
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "PhysicsFormulas");
-  XLSX.writeFile(wb, "Physics_Formula_Template.xlsx");
+  XLSX.utils.book_append_sheet(wb, ws, 'PhysicsFormulas');
+  XLSX.writeFile(wb, 'Physics_Formula_Template.xlsx');
 };
 
 export const downloadSampleCsvTemplate = () => {
