@@ -11,6 +11,7 @@ import {
 import { User } from 'firebase/auth';
 import { StudyStreakState } from '../types';
 import { getLocalDateKey } from '../services/srsEngine';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type NavView = 'decks' | 'analytics' | 'calendar';
 
@@ -87,6 +88,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 {streak.currentStreak === 1 ? 'Day' : 'Days'}
               </span>
             </button>
+
+            {/* In-App PWA Install Button */}
+            <PWAInstallButton />
 
             {onSyncAll && (
               <button

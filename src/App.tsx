@@ -24,6 +24,7 @@ import { ExcelGuideModal } from './components/ExcelGuideModal';
 import { DueTodayHolder } from './components/DueTodayHolder';
 import { CalendarView } from './components/CalendarView';
 import { StreakAnalyticsView } from './components/StreakAnalyticsView';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import { convertMcpPayloadToDeckAndCards } from './services/mcpService';
 import {
   loadOrBootstrapUserFirestoreState,
@@ -637,6 +638,8 @@ export default function App() {
         isOpen={isGuideOpen}
         onClose={() => setIsGuideOpen(false)}
       />
+
+      <OfflineIndicator />
     </div>
   );
 }
