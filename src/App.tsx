@@ -1,31 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
-import { Plus, CheckCircle2, Trash2, AlertCircle, HelpCircle } from 'lucide-react';
-import { Deck, Flashcard } from './types';
+import { Plus, CheckCircle2, Trash2, HelpCircle } from 'lucide-react';
+import { Deck, Flashcard, StudySessionMode, DeckSessionState } from './types';
 import {
   getStoredDecks,
   saveStoredDecks,
   getStoredCards,
   saveStoredCards,
+  getDueTodaySessionState,
+  rolloverOverdueCardsFromPastDays,
 } from './services/storage';
+import { isCardDueToday } from './services/srsEngine';
 import { initAuth, googleSignIn, logout, getAccessToken } from './services/auth';
 import { fetchDriveFileBinary, fetchDriveFileMetadata } from './services/drive';
 import { convertRowsToFlashcards } from './services/excelParser';
-import { Navbar } from './components/Navbar';
+import { Navbar, NavView } from './components/Navbar';
 import { DeckCard } from './components/DeckCard';
 import { StudySession } from './components/StudySession';
 import { DrivePickerModal } from './components/DrivePickerModal';
 import { FormulaBrowserModal } from './components/FormulaBrowserModal';
 import { Scratchpad } from './components/Scratchpad';
-import { FormulaDisplay } from './components/FormulaDisplay';
 import { ExcelGuideModal } from './components/ExcelGuideModal';
+import { DueTodayHolder } from './components/DueTodayHolder';
+import { CalendarView } from './components/CalendarView';
 
 export default function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
   const [cards, setCards] = useState<Flashcard[]>([]);
+  const [dueSessionState, setDueSessionState] = useState<DeckSessionState | undefined>(undefined);
   const [user, setUser] = useState<User | null>(null);
 
-  const [currentView, setCurrentView] = useState<'decks' | 'due' | 'scratchpad'>('decks');
+  const [currentView, setCurrentView] = useState<NavView>('decks');
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [browseDeck, setBrowseDeck] = useState<Deck | null>(null);
@@ -33,16 +38,42 @@ export default function App() {
 
   // Active Study Session
   const [activeStudyDeck, setActiveStudyDeck] = useState<Deck | null>(null);
+  const [activeSessionCards, setActiveSessionCards] = useState<Flashcard[]>([]);
+  const [activeSessionMode, setActiveSessionMode] = useState<StudySessionMode>('recall');
   const [resumeMode, setResumeMode] = useState<boolean>(false);
+  const [initialCardIndex, setInitialCardIndex] = useState<number>(0);
 
   // Sync state
   const [syncingDeckIds, setSyncingDeckIds] = useState<Record<string, boolean>>({});
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
 
+  const showToast = (msg: string, durationMs = 3000) => {
+    setSyncToast(msg);
+    setTimeout(() => setSyncToast(null), durationMs);
+  };
+
+  // Load decks & cards and automatically shift unfinished past due cards to the new day
   useEffect(() => {
-    setDecks(getStoredDecks());
-    setCards(getStoredCards());
+    const loadedDecks = getStoredDecks();
+    const loadedCards = getStoredCards();
+    const { updatedCards } = rolloverOverdueCardsFromPastDays(loadedCards);
+
+    setDecks(loadedDecks);
+    setCards(updatedCards);
+    setDueSessionState(getDueTodaySessionState());
+  }, []);
+
+  // Automatic background rollover check when the day ends
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentStored = getStoredCards();
+      const { updatedCards, shiftedCount } = rolloverOverdueCardsFromPastDays(currentStored);
+      if (shiftedCount > 0) {
+        setCards(updatedCards);
+      }
+    }, 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -76,12 +107,7 @@ export default function App() {
     setCards(updatedCards);
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
-    setSyncToast(`Added ${newDeck.name}`);
-    setTimeout(() => setSyncToast(null), 3000);
-  };
-
-  const onRequestDeleteDeck = (deck: Deck) => {
-    setDeckToDelete(deck);
+    showToast(`Added ${newDeck.name}`);
   };
 
   const confirmDeleteDeck = (target: Deck) => {
@@ -95,18 +121,90 @@ export default function App() {
     if (browseDeck?.id === target.id) {
       setBrowseDeck(null);
     }
-    setSyncToast(`Deleted "${target.name}"`);
-    setTimeout(() => setSyncToast(null), 3000);
+    showToast(`Deleted "${target.name}"`);
   };
 
-  const handleStartFresh = (deck: Deck) => {
+  const handleStartFresh = (deck: Deck, mode: StudySessionMode = 'recall') => {
+    const deckCards = cards.filter(c => c.deckId === deck.id);
     setActiveStudyDeck(deck);
+    setActiveSessionCards(deckCards);
+    setActiveSessionMode(mode);
     setResumeMode(false);
+    setInitialCardIndex(0);
   };
 
-  const handleResume = (deck: Deck) => {
+  const handleResume = (deck: Deck, mode: StudySessionMode = 'recall') => {
+    const deckCards = cards.filter(c => c.deckId === deck.id);
     setActiveStudyDeck(deck);
+    setActiveSessionCards(deckCards);
+    setActiveSessionMode(mode);
     setResumeMode(true);
+    setInitialCardIndex(0);
+  };
+
+  // Automatically picks up where the user left off across due cards (or within a specific deck's due cards)
+  const handleReviewDue = (options?: {
+    deckId?: string;
+    startCardId?: string;
+    startFresh?: boolean;
+  }) => {
+    if (options?.deckId) {
+      const targetDeck = decks.find(d => d.id === options.deckId);
+      const deckDue = cards.filter(c => c.deckId === options.deckId && isCardDueToday(c));
+      if (!targetDeck || deckDue.length === 0) return;
+
+      const cardIdx = options.startCardId
+        ? Math.max(0, deckDue.findIndex(c => c.id === options.startCardId))
+        : 0;
+
+      setActiveStudyDeck(targetDeck);
+      setActiveSessionCards(deckDue);
+      setActiveSessionMode('recall');
+      setResumeMode(!options.startFresh && !options.startCardId);
+      setInitialCardIndex(cardIdx);
+      return;
+    }
+
+    const dueOrderedDeckWise: Flashcard[] = [];
+    for (const deck of decks) {
+      const deckDue = cards.filter(c => c.deckId === deck.id && isCardDueToday(c));
+      dueOrderedDeckWise.push(...deckDue);
+    }
+
+    if (dueOrderedDeckWise.length === 0) return;
+
+    const syntheticDueDeck: Deck = {
+      id: '__due_today__',
+      name: 'Due Today',
+      lastSyncedAt: new Date().toISOString(),
+      syncIntervalHours: 24,
+      columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
+      cardsCount: dueOrderedDeckWise.length,
+      sessionState: getDueTodaySessionState(),
+    };
+
+    setActiveStudyDeck(syntheticDueDeck);
+    setActiveSessionCards(dueOrderedDeckWise);
+    setActiveSessionMode('due-continuous');
+    setResumeMode(!options?.startFresh);
+    setInitialCardIndex(0);
+  };
+
+  const handleStartContinuousCustomCards = (cardsToStudy: Flashcard[], sessionTitle: string) => {
+    if (cardsToStudy.length === 0) return;
+    const syntheticDeck: Deck = {
+      id: '__custom_calendar_session__',
+      name: sessionTitle,
+      lastSyncedAt: new Date().toISOString(),
+      syncIntervalHours: 24,
+      columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
+      cardsCount: cardsToStudy.length,
+    };
+    setActiveStudyDeck(syntheticDeck);
+    setActiveSessionCards(cardsToStudy);
+    setActiveSessionMode('due-continuous');
+    setResumeMode(false);
+    setInitialCardIndex(0);
   };
 
   const handleRefreshDeck = async (deck: Deck) => {
@@ -141,6 +239,9 @@ export default function App() {
             dueDate: match.dueDate,
             state: match.state,
             lastReviewedAt: match.lastReviewedAt,
+            firstTimeReviewedAt: match.firstTimeReviewedAt,
+            shiftedFromDate: match.shiftedFromDate,
+            rolloverCount: match.rolloverCount,
           };
         }
         return fresh;
@@ -162,11 +263,9 @@ export default function App() {
       saveStoredDecks(updatedDecks);
       saveStoredCards(updatedCards);
 
-      setSyncToast(`Synced "${deck.name}" with Drive`);
-      setTimeout(() => setSyncToast(null), 3000);
+      showToast(`Synced "${deck.name}" with Drive`);
     } catch (err: any) {
-      setSyncToast(`Sync failed: ${err?.message || 'Error connecting to Google Drive'}`);
-      setTimeout(() => setSyncToast(null), 4000);
+      showToast(`Sync failed: ${err?.message || 'Error connecting to Google Drive'}`, 4000);
     } finally {
       setSyncingDeckIds(prev => ({ ...prev, [deck.id]: false }));
     }
@@ -192,14 +291,24 @@ export default function App() {
     const updatedDecks = decks.map(d => {
       if (d.id === targetDeckId) {
         const remainingQueue = d.sessionState?.remainingQueueIds?.filter(id => id !== cardId) || [];
+        const remainingFirstTime = d.firstTimeSessionState?.remainingQueueIds?.filter(id => id !== cardId) || [];
         return {
           ...d,
           cardsCount: Math.max(0, d.cardsCount - 1),
-          sessionState: d.sessionState ? {
-            ...d.sessionState,
-            remainingQueueIds: remainingQueue,
-            totalInSession: Math.max(0, d.sessionState.totalInSession - 1),
-          } : undefined,
+          sessionState: d.sessionState
+            ? {
+                ...d.sessionState,
+                remainingQueueIds: remainingQueue,
+                totalInSession: Math.max(0, d.sessionState.totalInSession - 1),
+              }
+            : undefined,
+          firstTimeSessionState: d.firstTimeSessionState
+            ? {
+                ...d.firstTimeSessionState,
+                remainingQueueIds: remainingFirstTime,
+                totalInSession: Math.max(0, d.firstTimeSessionState.totalInSession - 1),
+              }
+            : undefined,
         };
       }
       return d;
@@ -209,23 +318,25 @@ export default function App() {
     setCards(updatedCards);
     saveStoredDecks(updatedDecks);
     saveStoredCards(updatedCards);
-    setSyncToast('Formula removed');
-    setTimeout(() => setSyncToast(null), 2000);
+    showToast('Formula removed', 2000);
   };
 
-  // Active study session takes full screen on mobile
+  // Active study session takes full screen
   if (activeStudyDeck) {
-    const deckCards = cards.filter(c => c.deckId === activeStudyDeck.id);
     return (
       <div className="min-h-screen mobile-canvas-bg selection:bg-black selection:text-white">
         <StudySession
           deck={activeStudyDeck}
-          cards={deckCards}
+          cards={activeSessionCards}
+          allDecks={decks}
+          mode={activeSessionMode}
           resumeFromSession={resumeMode}
+          initialCardIndex={initialCardIndex}
           onExit={() => {
             setActiveStudyDeck(null);
             setDecks(getStoredDecks());
             setCards(getStoredCards());
+            setDueSessionState(getDueTodaySessionState());
           }}
           onDeleteCard={handleDeleteCard}
         />
@@ -233,12 +344,11 @@ export default function App() {
     );
   }
 
-  const now = Date.now();
-  const dueCardsTotal = cards.filter(c => new Date(c.dueDate).getTime() <= now);
+  const dueCardsTotal = cards.filter(c => isCardDueToday(c));
 
   return (
     <div className="min-h-screen mobile-canvas-bg selection:bg-black selection:text-white flex flex-col pb-24">
-      {/* Mobile Top Navbar & Pinned Bottom Tab Bar */}
+      {/* Top Navbar & Pinned Bottom Tab Bar */}
       <Navbar
         currentView={currentView}
         onSelectView={setCurrentView}
@@ -253,13 +363,16 @@ export default function App() {
 
       {/* Sync Toast Notification */}
       {syncToast && (
-        <div className="fixed top-14 left-4 right-4 z-50 max-w-sm mx-auto">
-          <div className="glass-panel rounded-xl py-2 px-3 text-xs text-black flex items-center justify-between border border-black/15 shadow-sm">
-            <span className="flex items-center gap-1.5 truncate pr-2">
+        <div className="fixed top-14 left-4 right-4 z-50 max-w-md mx-auto">
+          <div className="glass-panel rounded-xl py-2.5 px-3.5 text-xs text-black flex items-center justify-between border border-black/15 shadow-sm">
+            <span className="flex items-center gap-2 pr-2">
               <CheckCircle2 className="w-4 h-4 text-black shrink-0" />
-              <span className="truncate">{syncToast}</span>
+              <span className="leading-snug">{syncToast}</span>
             </span>
-            <button onClick={() => setSyncToast(null)} className="text-black/50 text-xs cursor-pointer shrink-0">
+            <button
+              onClick={() => setSyncToast(null)}
+              className="text-black/50 text-xs cursor-pointer shrink-0 p-1"
+            >
               ✕
             </button>
           </div>
@@ -268,16 +381,24 @@ export default function App() {
 
       {/* Main View Container */}
       <main className="flex-1 max-w-xl mx-auto w-full px-4 py-4">
-        {/* VIEW 1: DECKS */}
+        {/* VIEW 1: MAIN DASHBOARD (DUE TODAY HOLDER + DECKS) */}
         {currentView === 'decks' && (
-          <div className="space-y-4">
-            {/* Minimalist Summary Header */}
-            <div className="flex items-center justify-between py-1">
+          <div className="space-y-5">
+            {/* Main Dashboard Due Today Holder */}
+            <DueTodayHolder
+              decks={decks}
+              cards={cards}
+              dueSessionState={dueSessionState}
+              onReviewDue={handleReviewDue}
+            />
+
+            {/* Minimalist Decks Header */}
+            <div className="flex items-center justify-between pt-1">
               <div>
                 <h1 className="text-lg font-bold text-black tracking-tight">
                   Formula Decks
                 </h1>
-                <p className="text-xs text-black/50">
+                <p className="text-xs text-black/50 tabular-nums">
                   {cards.length} formulas · {dueCardsTotal.length} due today
                 </p>
               </div>
@@ -337,63 +458,26 @@ export default function App() {
         {/* VIEW 2: DUE TODAY */}
         {currentView === 'due' && (
           <div className="space-y-4">
-            <div className="py-1">
-              <h2 className="text-lg font-bold text-black tracking-tight">
-                Due Today ({dueCardsTotal.length})
-              </h2>
-              <p className="text-xs text-black/50">
-                Spaced repetitions due for review
-              </p>
-            </div>
-
-            {dueCardsTotal.length > 0 ? (
-              <div className="space-y-2.5">
-                {dueCardsTotal.map((card) => {
-                  const deck = decks.find(d => d.id === card.deckId);
-                  return (
-                    <div
-                      key={card.id}
-                      className="glass-card rounded-xl p-3.5 flex items-center justify-between gap-3 border border-black/10"
-                    >
-                      <div className="truncate pr-2 space-y-1">
-                        <span className="text-[10px] text-black/40 block">
-                          {deck?.name || 'Formula'}
-                        </span>
-                        <p className="text-xs font-bold text-black truncate">
-                          {card.statement}
-                        </p>
-                        <div className="text-xs text-black/90 truncate">
-                          <FormulaDisplay formula={card.formula} displayMode={false} size="sm" />
-                        </div>
-                      </div>
-
-                      {deck && (
-                        <button
-                          onClick={() => handleResume(deck)}
-                          className="glass-button-primary px-3 py-2 rounded-xl text-xs font-bold shrink-0 min-h-[40px] cursor-pointer"
-                        >
-                          Review
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="glass-card rounded-2xl p-8 text-center border border-black/10 space-y-2">
-                <CheckCircle2 className="w-8 h-8 mx-auto text-black" />
-                <h3 className="text-sm font-bold text-black">
-                  All Caught Up!
-                </h3>
-                <p className="text-xs text-black/50">
-                  Zero formulas due right now.
-                </p>
-              </div>
-            )}
+            <DueTodayHolder
+              decks={decks}
+              cards={cards}
+              dueSessionState={dueSessionState}
+              onReviewDue={handleReviewDue}
+              showExpandedCardsByDefault={true}
+            />
           </div>
         )}
 
-        {/* VIEW 3: SCRATCHPAD */}
+        {/* VIEW 3: CALENDAR */}
+        {currentView === 'calendar' && (
+          <CalendarView
+            decks={decks}
+            cards={cards}
+            onStartContinuousCards={handleStartContinuousCustomCards}
+          />
+        )}
+
+        {/* VIEW 4: SCRATCHPAD */}
         {currentView === 'scratchpad' && (
           <div className="space-y-3">
             <div className="py-1">
@@ -409,7 +493,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Delete Confirmation Modal (In-app, iframe safe, zero window.confirm) */}
+      {/* Delete Confirmation Modal */}
       {deckToDelete && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="glass-card rounded-2xl w-full max-w-sm p-5 border border-black/10 shadow-2xl space-y-4 bg-white/95">
@@ -454,10 +538,14 @@ export default function App() {
         cards={cards}
         isOpen={Boolean(browseDeck)}
         onClose={() => setBrowseDeck(null)}
-        onStudyCard={(deck) => {
+        onStudyCard={(deck, cardIdx) => {
           setBrowseDeck(null);
+          const deckCards = cards.filter(c => c.deckId === deck.id);
           setActiveStudyDeck(deck);
+          setActiveSessionCards(deckCards);
+          setActiveSessionMode('recall');
           setResumeMode(false);
+          setInitialCardIndex(cardIdx || 0);
         }}
         onDeleteCard={handleDeleteCard}
         onDeleteDeck={confirmDeleteDeck}

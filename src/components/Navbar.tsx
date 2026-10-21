@@ -1,10 +1,12 @@
 import React from 'react';
-import { Layers, CheckCircle2, PenTool, Plus, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { Layers, CheckCircle2, Calendar, PenTool, Plus, LogOut, RefreshCw } from 'lucide-react';
 import { User } from 'firebase/auth';
 
+export type NavView = 'decks' | 'due' | 'calendar' | 'scratchpad';
+
 interface NavbarProps {
-  currentView: 'decks' | 'due' | 'scratchpad';
-  onSelectView: (view: 'decks' | 'due' | 'scratchpad') => void;
+  currentView: NavView;
+  onSelectView: (view: NavView) => void;
   onOpenConnectModal: () => void;
   user: User | null;
   onSignIn: () => void;
@@ -34,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center text-xs font-bold shadow-xs">
               ∑
             </div>
-            <span className="font-bold text-sm tracking-tight text-black">
+            <span className="font-bold text-sm tracking-tight text-black whitespace-nowrap">
               SynapseFormula
             </span>
           </div>
@@ -80,8 +82,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Pinned Bottom Thumb Navigation Bar (Natural Reach Zone) */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 glass-panel border-t border-black/10 pb-safe">
-        <div className="max-w-md mx-auto grid grid-cols-4 items-center h-16 px-2">
-          {/* Tab 1: Decks */}
+        <div className="max-w-lg mx-auto grid grid-cols-5 items-center h-16 px-1">
+          {/* Tab 1: Decks (Home Dashboard) */}
           <button
             onClick={() => onSelectView('decks')}
             className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-colors cursor-pointer ${
@@ -89,7 +91,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Layers className="w-5 h-5" />
-            <span className="text-[10px] mt-1 tracking-tight">Decks</span>
+            <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Decks</span>
           </button>
 
           {/* Tab 2: Due Today */}
@@ -102,15 +104,26 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="relative">
               <CheckCircle2 className="w-5 h-5" />
               {dueCount > 0 && (
-                <span className="absolute -top-1 -right-2 bg-black text-white text-[9px] font-bold px-1 rounded-full">
+                <span className="absolute -top-1 -right-2.5 bg-black text-white text-[9px] font-bold px-1 rounded-full tabular-nums">
                   {dueCount}
                 </span>
               )}
             </div>
-            <span className="text-[10px] mt-1 tracking-tight">Due</span>
+            <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Due</span>
           </button>
 
-          {/* Tab 3: Scratchpad */}
+          {/* Tab 3: Calendar */}
+          <button
+            onClick={() => onSelectView('calendar')}
+            className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-colors cursor-pointer ${
+              currentView === 'calendar' ? 'text-black font-bold' : 'text-black/40 hover:text-black'
+            }`}
+          >
+            <Calendar className="w-5 h-5" />
+            <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Calendar</span>
+          </button>
+
+          {/* Tab 4: Scratchpad */}
           <button
             onClick={() => onSelectView('scratchpad')}
             className={`flex flex-col items-center justify-center h-full min-h-[44px] transition-colors cursor-pointer ${
@@ -118,10 +131,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <PenTool className="w-5 h-5" />
-            <span className="text-[10px] mt-1 tracking-tight">Scratch</span>
+            <span className="text-[10px] mt-1 tracking-tight whitespace-nowrap">Scratch</span>
           </button>
 
-          {/* Tab 4: Add Excel */}
+          {/* Tab 5: Add Excel */}
           <button
             onClick={onOpenConnectModal}
             className="flex flex-col items-center justify-center h-full min-h-[44px] text-black hover:text-black/80 transition-colors cursor-pointer"
@@ -129,7 +142,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="w-6 h-6 rounded-full bg-black text-white flex items-center justify-center">
               <Plus className="w-3.5 h-3.5" />
             </div>
-            <span className="text-[10px] mt-1 tracking-tight font-semibold">+ Import</span>
+            <span className="text-[10px] mt-1 tracking-tight font-semibold whitespace-nowrap">+ Import</span>
           </button>
         </div>
       </nav>

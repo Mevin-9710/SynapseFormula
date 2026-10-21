@@ -1,13 +1,14 @@
 import React from 'react';
-import { Play, RotateCcw, RefreshCw, List, Trash2 } from 'lucide-react';
-import { Deck, Flashcard } from '../types';
+import { Play, RotateCcw, RefreshCw, List, Trash2, BookOpen } from 'lucide-react';
+import { Deck, Flashcard, StudySessionMode } from '../types';
 import { isSyncDue } from '../services/storage';
+import { isCardDueToday } from '../services/srsEngine';
 
 interface DeckCardProps {
   deck: Deck;
   cards: Flashcard[];
-  onResume: (deck: Deck) => void;
-  onStartFresh: (deck: Deck) => void;
+  onResume: (deck: Deck, mode: StudySessionMode) => void;
+  onStartFresh: (deck: Deck, mode: StudySessionMode) => void;
   onRefreshDrive: (deck: Deck) => void;
   onDeleteDeck: (deck: Deck) => void;
   onBrowseDeck: (deck: Deck) => void;
@@ -25,18 +26,27 @@ export const DeckCard: React.FC<DeckCardProps> = ({
   isSyncing = false,
 }) => {
   const syncDue = isSyncDue(deck);
-  const now = new Date().getTime();
 
-  const dueCards = cards.filter(c => new Date(c.dueDate).getTime() <= now);
+  const dueCards = cards.filter(c => isCardDueToday(c));
+  const unseenCards = cards.filter(c => !c.firstTimeReviewedAt && c.repetitionCount === 0);
   const masteredCards = cards.filter(c => c.state === 'mastered');
 
   const [isConfirmingDelete, setIsConfirmingDelete] = React.useState(false);
 
-  const hasSessionState = Boolean(
+  const hasRecallSession = Boolean(
     deck.sessionState &&
     deck.sessionState.remainingQueueIds &&
     deck.sessionState.remainingQueueIds.length > 0
   );
+
+  const hasFirstTimeSession = Boolean(
+    deck.firstTimeSessionState &&
+    deck.firstTimeSessionState.remainingQueueIds &&
+    deck.firstTimeSessionState.remainingQueueIds.length > 0
+  );
+
+  // Only show First Time Review on the deck if there are still unseen cards in this deck
+  const showFirstTimeReview = unseenCards.length > 0;
 
   return (
     <div className="glass-card rounded-2xl p-4 sm:p-5 flex flex-col justify-between border border-black/10 shadow-xs relative">
@@ -74,8 +84,8 @@ export const DeckCard: React.FC<DeckCardProps> = ({
           </div>
         </div>
 
-        {/* Decluttered Metadata Line */}
-        <div className="flex items-center gap-2 text-xs text-black/60 mb-4">
+        {/* Clean Metadata Line */}
+        <div className="flex items-center gap-2 text-xs text-black/60 mb-4 tabular-nums">
           <span>{cards.length} formulas</span>
           <span>·</span>
           <span className={dueCards.length > 0 ? 'text-black font-semibold' : ''}>
@@ -90,7 +100,7 @@ export const DeckCard: React.FC<DeckCardProps> = ({
         </div>
       </div>
 
-      {/* Thumb-Optimized Action Area */}
+      {/* Action Area */}
       <div className="space-y-2 pt-2 border-t border-black/5">
         {isConfirmingDelete ? (
           <div className="p-3 rounded-xl bg-black text-white space-y-2 animate-in fade-in duration-150">
@@ -123,53 +133,72 @@ export const DeckCard: React.FC<DeckCardProps> = ({
               </button>
             </div>
           </div>
-        ) : hasSessionState ? (
-          <>
-            {/* Primary Full-Width Thumb Target: Resume */}
-            <button
-              onClick={() => onResume(deck)}
-              className="glass-button-primary w-full h-12 rounded-xl text-xs font-bold flex items-center justify-between px-4 cursor-pointer shadow-sm"
-            >
-              <span className="flex items-center gap-2">
-                <Play className="w-3.5 h-3.5 fill-current" />
-                Resume Card #{deck.sessionState!.lastCardIndex + 1}
-              </span>
-              <span className="text-[11px] text-white/60 font-normal">
-                {deck.sessionState!.remainingQueueIds.length} left
-              </span>
-            </button>
-
-            <div className="flex items-center justify-between text-xs text-black/60 pt-1">
-              <button
-                onClick={() => onStartFresh(deck)}
-                className="hover:text-black flex items-center gap-1 py-1 cursor-pointer min-h-[36px]"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Start Fresh
-              </button>
-              <button
-                onClick={() => onBrowseDeck(deck)}
-                className="hover:text-black flex items-center gap-1 py-1 cursor-pointer min-h-[36px]"
-              >
-                <List className="w-3 h-3" />
-                Browse List
-              </button>
-            </div>
-          </>
         ) : (
           <>
-            <button
-              onClick={() => onStartFresh(deck)}
-              className="glass-button-primary w-full h-12 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              {dueCards.length > 0 ? `Study (${dueCards.length} Due)` : 'Study Deck'}
-            </button>
+            {/* Primary Study / Resume Button */}
+            {hasRecallSession ? (
+              <button
+                onClick={() => onResume(deck, 'recall')}
+                className="glass-button-primary w-full h-11 rounded-xl text-xs font-bold flex items-center justify-between px-4 cursor-pointer shadow-sm"
+              >
+                <span className="flex items-center gap-2">
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  Resume Card #{deck.sessionState!.lastCardIndex + 1}
+                </span>
+                <span className="text-[11px] text-white/60 font-normal tabular-nums">
+                  {deck.sessionState!.remainingQueueIds.length} left
+                </span>
+              </button>
+            ) : (
+              <button
+                onClick={() => onStartFresh(deck, 'recall')}
+                className="glass-button-primary w-full h-11 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>{dueCards.length > 0 ? `Study (${dueCards.length} Due)` : 'Study Deck'}</span>
+              </button>
+            )}
 
-            <div className="flex items-center justify-end text-xs text-black/60 pt-1">
+            {/* First Time Review Button — ONLY shown while there are still unseen cards in this deck */}
+            {showFirstTimeReview && (
+              <button
+                onClick={() =>
+                  hasFirstTimeSession
+                    ? onResume(deck, 'first-time')
+                    : onStartFresh(deck, 'first-time')
+                }
+                className="glass-button w-full h-10 rounded-xl text-xs font-semibold text-black flex items-center justify-between px-3.5 cursor-pointer hover:border-black/30"
+              >
+                <span className="flex items-center gap-2">
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>
+                    {hasFirstTimeSession ? 'Resume First Time Review' : 'First Time Review'}
+                  </span>
+                </span>
+                <span className="text-[11px] text-black/50 font-normal tabular-nums">
+                  {unseenCards.length} unseen
+                </span>
+              </button>
+            )}
+
+            {/* Secondary Footer Links: Start Fresh & Browse List */}
+            <div className="flex items-center justify-between text-xs text-black/60 pt-0.5 px-0.5">
+              {(hasRecallSession || hasFirstTimeSession) ? (
+                <button
+                  onClick={() =>
+                    onStartFresh(deck, hasFirstTimeSession && !hasRecallSession ? 'first-time' : 'recall')
+                  }
+                  className="hover:text-black flex items-center gap-1 py-1 cursor-pointer min-h-[34px]"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Start Fresh
+                </button>
+              ) : (
+                <span />
+              )}
               <button
                 onClick={() => onBrowseDeck(deck)}
-                className="hover:text-black flex items-center gap-1 py-1 cursor-pointer min-h-[36px]"
+                className="hover:text-black flex items-center gap-1 py-1 cursor-pointer min-h-[34px]"
               >
                 <List className="w-3 h-3" />
                 Browse List

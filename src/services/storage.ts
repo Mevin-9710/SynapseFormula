@@ -1,7 +1,9 @@
-import { Deck, Flashcard, DeckSessionState } from '../types';
+import { Deck, Flashcard, DeckSessionState, StudySessionMode } from '../types';
+import { getLocalDateKey, isCardDueToday } from './srsEngine';
 
 const DECKS_KEY = 'synapse_formula_decks_v1';
 const CARDS_KEY = 'synapse_formula_cards_v1';
+const DUE_SESSION_KEY = 'synapse_formula_due_session_v1';
 
 export const getStoredDecks = (): Deck[] => {
   try {
@@ -62,20 +64,128 @@ export const updateCardInStorage = (updatedCard: Flashcard): void => {
 };
 
 /**
- * Universally updates session resumption state for a specific deck.
- * Saves current card index, card id, stage, and timestamp.
+ * Universally updates session resumption state for a specific deck or global due session.
+ * Supports separate persistence for 'first-time' review vs 'recall' study.
  */
-export const saveDeckSessionState = (deckId: string, sessionState: DeckSessionState | undefined): void => {
+export const saveDeckSessionState = (
+  deckId: string,
+  sessionState: DeckSessionState | undefined,
+  mode: StudySessionMode = 'recall'
+): void => {
+  if (deckId === '__due_today__' || mode === 'due-continuous') {
+    saveDueTodaySessionState(sessionState);
+    return;
+  }
+
   const decks = getStoredDecks();
   const idx = decks.findIndex(d => d.id === deckId);
   if (idx >= 0) {
-    decks[idx].sessionState = sessionState;
+    if (mode === 'first-time') {
+      decks[idx].firstTimeSessionState = sessionState;
+    } else {
+      decks[idx].sessionState = sessionState;
+    }
     saveStoredDecks(decks);
   }
 };
 
-export const clearDeckSessionState = (deckId: string): void => {
-  saveDeckSessionState(deckId, undefined);
+export const clearDeckSessionState = (deckId: string, mode: StudySessionMode = 'recall'): void => {
+  saveDeckSessionState(deckId, undefined, mode);
+};
+
+export const getDueTodaySessionState = (): DeckSessionState | undefined => {
+  try {
+    const raw = localStorage.getItem(DUE_SESSION_KEY);
+    if (!raw) return undefined;
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+};
+
+export const saveDueTodaySessionState = (sessionState: DeckSessionState | undefined): void => {
+  try {
+    if (!sessionState) {
+      localStorage.removeItem(DUE_SESSION_KEY);
+    } else {
+      localStorage.setItem(DUE_SESSION_KEY, JSON.stringify(sessionState));
+    }
+  } catch (err) {
+    console.error('Error saving continuous due session state:', err);
+  }
+};
+
+/**
+ * Automatically rolls over any incomplete due cards from past calendar days
+ * to today's schedule so no unfinished cards from yesterday or earlier are stranded.
+ */
+export const rolloverOverdueCardsFromPastDays = (
+  currentCards: Flashcard[]
+): { updatedCards: Flashcard[]; shiftedCount: number; shiftedByDeck: Record<string, number> } => {
+  const now = new Date();
+  const todayKey = getLocalDateKey(now);
+  const todayMorning = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0).toISOString();
+
+  let shiftedCount = 0;
+  const shiftedByDeck: Record<string, number> = {};
+
+  const updatedCards = currentCards.map(card => {
+    const cardDateKey = getLocalDateKey(card.dueDate);
+    if (cardDateKey < todayKey) {
+      shiftedCount += 1;
+      shiftedByDeck[card.deckId] = (shiftedByDeck[card.deckId] || 0) + 1;
+      return {
+        ...card,
+        shiftedFromDate: cardDateKey,
+        rolloverCount: (card.rolloverCount || 0) + 1,
+        dueDate: todayMorning,
+      };
+    }
+    return card;
+  });
+
+  if (shiftedCount > 0) {
+    saveStoredCards(updatedCards);
+  }
+
+  return { updatedCards, shiftedCount, shiftedByDeck };
+};
+
+/**
+ * Shifts remaining incomplete due cards for today to Tomorrow (segregated by deck or across all decks).
+ */
+export const shiftRemainingTodayCardsToTomorrow = (
+  currentCards: Flashcard[],
+  targetDeckId?: string
+): { updatedCards: Flashcard[]; shiftedCount: number } => {
+  const now = new Date();
+  const todayKey = getLocalDateKey(now);
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
+  const tomorrowIso = tomorrow.toISOString();
+
+  let shiftedCount = 0;
+  const updatedCards = currentCards.map(card => {
+    const matchesDeck = !targetDeckId || card.deckId === targetDeckId;
+    if (matchesDeck && isCardDueToday(card, now)) {
+      shiftedCount += 1;
+      return {
+        ...card,
+        shiftedFromDate: todayKey,
+        rolloverCount: (card.rolloverCount || 0) + 1,
+        dueDate: tomorrowIso,
+      };
+    }
+    return card;
+  });
+
+  if (shiftedCount > 0) {
+    saveStoredCards(updatedCards);
+    if (!targetDeckId) {
+      saveDueTodaySessionState(undefined);
+    }
+  }
+
+  return { updatedCards, shiftedCount };
 };
 
 /**
@@ -120,6 +230,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       totalInSession: 5,
       completedInSession: 0,
       lastStudiedAt: now,
+      mode: 'recall',
     },
   };
 

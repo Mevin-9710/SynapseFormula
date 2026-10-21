@@ -1,12 +1,6 @@
 import { getAccessToken } from './auth';
 import { DriveFileItem } from '../types';
 
-export const listDriveExcelFiles = async (searchQuery: string = ''): Promise<DriveFileItem[]> => {
-  const token = await getAccessToken();
-  if (!token) {
-    throw new Error('Google Drive access requires authentication. Please sign in with Google.');
-  }
-
 // Filter for Google Sheets, Excel (.xlsx, .xls), CSV, TSV, and OpenDocument spreadsheets
 export const listDriveExcelFiles = async (searchQuery: string = ''): Promise<DriveFileItem[]> => {
   const token = await getAccessToken();

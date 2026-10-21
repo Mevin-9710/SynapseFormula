@@ -6,7 +6,8 @@ export interface VariableDefinition {
 
 export type CardStage = 'statement' | 'cloze' | 'variables';
 export type CardState = 'new' | 'learning' | 'review' | 'mastered';
-export type SrsRating = 'again' | 'hard' | 'good' | 'easy';
+export type SrsRating = 'first-time' | 'again' | 'hard' | 'good' | 'easy';
+export type StudySessionMode = 'recall' | 'first-time' | 'due-continuous';
 
 export interface Flashcard {
   id: string;
@@ -25,6 +26,9 @@ export interface Flashcard {
   repetitionCount: number;
   dueDate: string; // ISO string
   lastReviewedAt?: string;
+  firstTimeReviewedAt?: string;
+  shiftedFromDate?: string;
+  rolloverCount?: number;
   state: CardState;
 }
 
@@ -36,6 +40,7 @@ export interface DeckSessionState {
   totalInSession: number;
   completedInSession: number;
   lastStudiedAt: string; // ISO string
+  mode?: StudySessionMode;
 }
 
 export interface ColumnMapping {
@@ -58,7 +63,8 @@ export interface Deck {
   syncIntervalHours: number; // default: 24
   columnMapping: ColumnMapping;
   cardsCount: number;
-  sessionState?: DeckSessionState; // Universal "Resume where I left off"
+  sessionState?: DeckSessionState; // Active recall session state ("Resume where I left off")
+  firstTimeSessionState?: DeckSessionState; // First Time Review session state ("Resume First Time Review")
 }
 
 export interface DriveFileItem {

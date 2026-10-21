@@ -10,8 +10,60 @@ export interface SrsCalculationResult {
 }
 
 /**
+ * Returns YYYY-MM-DD in the user's local timezone for calendar grouping and rollover checks.
+ */
+export const getLocalDateKey = (dateInput: string | Date | number = new Date()): string => {
+  const d = new Date(dateInput);
+  if (Number.isNaN(d.getTime())) {
+    const fallback = new Date();
+    return `${fallback.getFullYear()}-${String(fallback.getMonth() + 1).padStart(2, '0')}-${String(fallback.getDate()).padStart(2, '0')}`;
+  }
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Checks if a card is due today (any time up to 23:59:59 today) or earlier.
+ */
+export const isCardDueToday = (card: Flashcard, referenceDate: Date = new Date()): boolean => {
+  const todayKey = getLocalDateKey(referenceDate);
+  const cardKey = getLocalDateKey(card.dueDate);
+  return cardKey <= todayKey;
+};
+
+/**
+ * Formats a human-readable repeat schedule label for a card (e.g., "Repeat after 3d", "Due today", "Due tomorrow").
+ */
+export const formatRepeatScheduleLabel = (card: Flashcard): string => {
+  const todayKey = getLocalDateKey(new Date());
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowKey = getLocalDateKey(tomorrow);
+  const cardKey = getLocalDateKey(card.dueDate);
+
+  if (card.intervalDays > 0) {
+    const intervalStr = formatIntervalReadable(card.intervalDays);
+    if (cardKey <= todayKey) {
+      return `Due today · Interval ${intervalStr}`;
+    }
+    if (cardKey === tomorrowKey) {
+      return `Due tomorrow · Repeat ${intervalStr}`;
+    }
+    return `Repeat after ${intervalStr}`;
+  }
+
+  if (card.firstTimeReviewedAt) {
+    return cardKey === tomorrowKey ? 'First-time reviewed · Due tomorrow' : 'First-time reviewed';
+  }
+
+  return 'New · Unseen';
+};
+
+/**
  * Calculates updated spaced repetition parameters using an accelerated hybrid SM-2 algorithm
- * designed specifically for rapid physics formula retention.
+ * designed specifically for rapid physics formula retention, including First Time Review.
  */
 export const calculateNextReview = (card: Flashcard, rating: SrsRating): SrsCalculationResult => {
   const now = new Date();
@@ -19,6 +71,28 @@ export const calculateNextReview = (card: Flashcard, rating: SrsRating): SrsCalc
   let easeFactor = card.easeFactor || 2.5;
   let repetitionCount = card.repetitionCount || 0;
   let state = card.state;
+
+  if (rating === 'first-time') {
+    // First Time Review: User is going through unfamiliar cards to learn what's in the deck first
+    // before testing active recall. No ease factor penalty; schedules card for tomorrow (1d).
+    intervalDays = 1;
+    easeFactor = card.easeFactor || 2.5;
+    repetitionCount = 0;
+    state = 'learning';
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+
+    return {
+      nextIntervalDays: intervalDays,
+      nextEaseFactor: Number(easeFactor.toFixed(2)),
+      nextRepetitionCount: repetitionCount,
+      nextDueDate: tomorrow.toISOString(),
+      nextState: state,
+      readableNextInterval: '1d',
+    };
+  }
 
   if (card.state === 'new' || card.state === 'learning' || repetitionCount === 0) {
     switch (rating) {
@@ -83,6 +157,16 @@ export const calculateNextReview = (card: Flashcard, rating: SrsRating): SrsCalc
     nextDueDate,
     nextState: state,
     readableNextInterval: formatIntervalReadable(intervalDays),
+  };
+};
+
+export const previewRatingIntervals = (card: Flashcard): Record<SrsRating, string> => {
+  return {
+    'first-time': calculateNextReview(card, 'first-time').readableNextInterval,
+    again: calculateNextReview(card, 'again').readableNextInterval,
+    hard: calculateNextReview(card, 'hard').readableNextInterval,
+    good: calculateNextReview(card, 'good').readableNextInterval,
+    easy: calculateNextReview(card, 'easy').readableNextInterval,
   };
 };
 
