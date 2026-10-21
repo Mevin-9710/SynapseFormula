@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/mcp",
+      "destination": "/api/mcp"
+    },
+    {
+      "source": "/api/mcp/pending-decks",
+      "destination": "/api/mcp?action=pending"
+    },
+    {
+      "source": "/api/mcp/manifest",
+      "destination": "/api/mcp?action=manifest"
+    }
+  ]
+}
