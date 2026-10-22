@@ -10,6 +10,10 @@ import {
   ChevronDown,
   ChevronUp,
   CloudOff,
+  AlertCircle,
+  ArrowRight,
+  Copy,
+  Check,
 } from 'lucide-react';
 import {
   Deck,
@@ -39,7 +43,7 @@ import {
   getLocalDateKey,
   sortDueCardsMostOverdueFirst,
 } from './services/srsEngine';
-import { initAuth, googleSignIn, logout, getAccessToken } from './services/auth';
+import { initAuth, googleSignIn, logout, getAccessToken, UnauthorizedDomainError } from './services/auth';
 import { fetchDriveFileBinary, fetchDriveFileMetadata } from './services/drive';
 import { initReviewLogStore } from './services/reviewLog';
 import { Navbar, NavView } from './components/Navbar';
@@ -116,6 +120,14 @@ export default function App() {
   const [syncingDeckIds, setSyncingDeckIds] = useState<Record<string, boolean>>({});
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+
+  // Firebase Auth Unauthorized Domain State
+  const [unauthorizedDomainModal, setUnauthorizedDomainModal] = useState<{
+    domain: string;
+    projectId: string;
+    settingsUrl: string;
+  } | null>(null);
+  const [copiedDomainApp, setCopiedDomainApp] = useState(false);
 
   // Apply "Reduce effects" class to <html> when toggled in Settings (5.20)
   useEffect(() => {
@@ -312,8 +324,17 @@ export default function App() {
         setUser(res.user);
         setHasDriveToken(Boolean(res.accessToken));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Sign-in failed:', err);
+      if (err instanceof UnauthorizedDomainError || err?.name === 'UnauthorizedDomainError') {
+        setUnauthorizedDomainModal({
+          domain: err.domain,
+          projectId: err.projectId,
+          settingsUrl: err.settingsUrl,
+        });
+      } else {
+        showToast(err?.message || 'Sign-in incomplete');
+      }
     }
   };
 
@@ -1089,6 +1110,76 @@ export default function App() {
               showToast(summaryMsg);
             }}
           />
+        )}
+
+        {unauthorizedDomainModal && (
+          <BottomSheet
+            isOpen={Boolean(unauthorizedDomainModal)}
+            onClose={() => setUnauthorizedDomainModal(null)}
+            title="Authorized Domain Required"
+          >
+            <div className="p-4 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500 shrink-0">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold">Firebase Auth Domain Allowlist</h3>
+                  <p className="text-[13px] text-secondary-contrast leading-relaxed">
+                    Firebase Authentication requires this application domain to be whitelisted under <strong>Authorized Domains</strong> in the Firebase Console for project <code className="font-mono font-bold text-xs">{unauthorizedDomainModal.projectId}</code> before Google Sign-In can open.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-black/5 dark:bg-white/5 border border-black/15 dark:border-white/15 space-y-2">
+                <div className="text-xs font-bold text-secondary-contrast">YOUR APP DOMAIN:</div>
+                <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10">
+                  <code className="text-xs font-mono font-bold truncate select-all">
+                    {unauthorizedDomainModal.domain}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(unauthorizedDomainModal.domain);
+                      setCopiedDomainApp(true);
+                      setTimeout(() => setCopiedDomainApp(false), 2000);
+                    }}
+                    className="glass-button min-h-[36px] px-3 rounded-lg text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    {copiedDomainApp ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedDomainApp ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs text-secondary-contrast pl-1">
+                <div className="font-bold text-foreground">How to fix in 30 seconds:</div>
+                <p>1. Tap <strong>Open Firebase Console Settings</strong> below</p>
+                <p>2. Scroll down to <strong>Authorized domains</strong> and click <strong>Add domain</strong></p>
+                <p>3. Paste your domain (<code className="font-mono">{unauthorizedDomainModal.domain}</code>) and click <strong>Add</strong></p>
+                <p>4. Return here and tap Sign In again!</p>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <a
+                  href={unauthorizedDomainModal.settingsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="glass-button-primary min-h-[48px] rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                >
+                  <span>Open Firebase Console Settings</span>
+                  <ArrowRight className="w-4 h-4" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setUnauthorizedDomainModal(null)}
+                  className="glass-button min-h-[44px] rounded-xl text-sm font-semibold cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </BottomSheet>
         )}
       </Suspense>
 

@@ -40,6 +40,22 @@ export const initAuth = (
   });
 };
 
+export class UnauthorizedDomainError extends Error {
+  domain: string;
+  projectId: string;
+  settingsUrl: string;
+
+  constructor(domain: string, projectId: string) {
+    super(
+      `Domain "${domain}" is not authorized in Firebase Authentication for project "${projectId}".`
+    );
+    this.name = 'UnauthorizedDomainError';
+    this.domain = domain;
+    this.projectId = projectId;
+    this.settingsUrl = `https://console.firebase.google.com/project/${projectId}/authentication/settings`;
+  }
+}
+
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
@@ -51,6 +67,17 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     return { user: result.user, accessToken: cachedAccessToken || '' };
   } catch (error: any) {
     console.error('Google Sign In error:', error);
+    if (
+      error?.code === 'auth/unauthorized-domain' ||
+      String(error?.message).includes('auth/unauthorized-domain')
+    ) {
+      const currentDomain =
+        typeof window !== 'undefined' && window.location?.hostname
+          ? window.location.hostname
+          : 'current domain';
+      const projectId = firebaseConfig.projectId;
+      throw new UnauthorizedDomainError(currentDomain, projectId);
+    }
     throw error;
   } finally {
     isSigningIn = false;

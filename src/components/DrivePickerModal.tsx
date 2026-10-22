@@ -23,7 +23,7 @@ import {
   MAX_SPREADSHEET_FILE_BYTES,
 } from '../services/excelParser';
 import { VERCEL_MCP_ENDPOINT } from '../services/mcpService';
-import { googleSignIn, getAccessToken } from '../services/auth';
+import { googleSignIn, getAccessToken, UnauthorizedDomainError } from '../services/auth';
 import { Deck, DriveFileItem, ColumnMapping } from '../types';
 import { FormulaDisplay } from './FormulaDisplay';
 import { ExcelGuideModal } from './ExcelGuideModal';
@@ -50,6 +50,12 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const [driveFiles, setDriveFiles] = useState<DriveFileItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [unauthorizedDomainInfo, setUnauthorizedDomainInfo] = useState<{
+    domain: string;
+    projectId: string;
+    settingsUrl: string;
+  } | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   // External MCP Server State
@@ -91,6 +97,8 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     setSelectedFile(null);
     setParsedSummary(null);
     setError(null);
+    setUnauthorizedDomainInfo(null);
+    setCopiedDomain(false);
   };
 
   const checkAuthAndLoad = async () => {
@@ -107,6 +115,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const handleSignIn = async () => {
     setIsAuthenticating(true);
     setError(null);
+    setUnauthorizedDomainInfo(null);
     try {
       const res = await googleSignIn();
       if (res?.accessToken) {
@@ -114,7 +123,15 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         loadDriveFiles();
       }
     } catch (err: any) {
-      setError(err?.message || 'Google sign-in incomplete.');
+      if (err instanceof UnauthorizedDomainError || err?.name === 'UnauthorizedDomainError') {
+        setUnauthorizedDomainInfo({
+          domain: err.domain,
+          projectId: err.projectId,
+          settingsUrl: err.settingsUrl,
+        });
+      } else {
+        setError(err?.message || 'Google sign-in incomplete.');
+      }
     } finally {
       setIsAuthenticating(false);
     }
@@ -381,6 +398,66 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 <Upload className="w-4 h-4 shrink-0" />
                 <span>File / CSV</span>
               </button>
+            </div>
+          )}
+
+          {unauthorizedDomainInfo && (
+            <div className="p-4 rounded-2xl glass-panel space-y-3 border-2 border-amber-500/50 bg-amber-500/10 dark:bg-amber-500/5">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-[15px] font-bold">Authorized Domain Required</h4>
+                  <p className="text-[13px] text-secondary-contrast leading-relaxed">
+                    Firebase Authentication blocked the sign-in popup because this domain is not yet on the Authorized Domains allowlist for Firebase project <code className="font-mono font-bold text-xs">{unauthorizedDomainInfo.projectId}</code>.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15">
+                <code className="text-xs font-mono font-bold truncate select-all">
+                  {unauthorizedDomainInfo.domain}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(unauthorizedDomainInfo.domain);
+                    setCopiedDomain(true);
+                    setTimeout(() => setCopiedDomain(false), 2000);
+                  }}
+                  className="glass-button min-h-[36px] px-2.5 rounded-lg text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  {copiedDomain ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedDomain ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+
+              <div className="space-y-1 text-xs text-secondary-contrast pl-1">
+                <p>1. Open <strong>Firebase Console Settings</strong></p>
+                <p>2. Scroll down to <strong>Authorized domains</strong> &gt; click <strong>Add domain</strong></p>
+                <p>3. Paste the domain above and click <strong>Add</strong></p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                <a
+                  href={unauthorizedDomainInfo.settingsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="glass-button-primary min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5"
+                >
+                  <span>Open Firebase Settings</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceTab('local');
+                    setUnauthorizedDomainInfo(null);
+                  }}
+                  className="glass-button min-h-[44px] px-3 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <span>Upload Local Spreadsheet Instead</span>
+                </button>
+              </div>
             </div>
           )}
 
