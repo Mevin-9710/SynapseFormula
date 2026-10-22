@@ -36,18 +36,38 @@ async function startServer() {
       appType: 'custom',
     });
 
-    // Provide a dummy @vite/client that never creates WebSocket connections
+    // Provide a lightweight @vite/client that injects styles without opening WebSockets
     app.get('/@vite/client', (_req, res) => {
       res.setHeader('Content-Type', 'application/javascript');
       res.send(
-        '// HMR disabled in sandboxed Cloud Run environment\n' +
-        'export function createHotContext() { return { accept() {}, dispose() {}, prune() {}, data: {}, on() {}, off() {}, send() {} }; }\n' +
-        'export const updateStyle = () => {};\n' +
-        'export const removeStyle = () => {};\n'
+        '// HMR disabled in sandboxed Cloud Run environment - CSS injector enabled\n' +
+        'const sheetsMap = new Map();\n' +
+        'export function updateStyle(id, content) {\n' +
+        '  let style = sheetsMap.get(id);\n' +
+        '  if (!style) {\n' +
+        '    style = document.createElement("style");\n' +
+        '    style.setAttribute("type", "text/css");\n' +
+        '    style.setAttribute("data-vite-dev-id", id);\n' +
+        '    document.head.appendChild(style);\n' +
+        '    sheetsMap.set(id, style);\n' +
+        '  }\n' +
+        '  style.textContent = content;\n' +
+        '}\n' +
+        'export function removeStyle(id) {\n' +
+        '  const style = sheetsMap.get(id);\n' +
+        '  if (style) {\n' +
+        '    document.head.removeChild(style);\n' +
+        '    sheetsMap.delete(id);\n' +
+        '  }\n' +
+        '}\n' +
+        'export function createHotContext() {\n' +
+        '  return { accept() {}, dispose() {}, prune() {}, data: {}, on() {}, off() {}, send() {} };\n' +
+        '}\n' +
+        'export const injectQuery = (url) => url;\n'
       );
     });
 
-    // Serve transformed index.html with @vite/client stripped
+    // Serve transformed index.html with our WebSocket-free @vite/client
     app.use(async (req, res, next) => {
       const url = req.originalUrl || req.url;
       const isHtmlReq =
@@ -66,7 +86,6 @@ async function startServer() {
         const indexPath = path.resolve(__dirname, 'index.html');
         let html = fs.readFileSync(indexPath, 'utf-8');
         html = await vite.transformIndexHtml(url, html);
-        html = html.replace(/<script\s+type="module"\s+src="\/@vite\/client"><\/script>/gi, '');
         res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
       } catch (e) {
         vite.ssrFixStacktrace(e as Error);
