@@ -19,17 +19,82 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&display=swap" rel="stylesheet">
     <script>
-      // Suppress benign Vite WebSocket HMR errors in iframe/Cloud Run preview environments
-      window.addEventListener('error', function(e) {
-        if (e && e.message && (e.message.includes('WebSocket') || e.message.includes('@vite/client'))) {
-          e.stopImmediatePropagation();
+      (function() {
+        // Suppress benign Vite WebSocket HMR errors in iframe/Cloud Run preview environments
+        var origError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var msg = args.map(function(a) { return String(a && a.message ? a.message : a); }).join(' ');
+          if (msg.indexOf('WebSocket closed without opened') !== -1 || (msg.indexOf('[vite]') !== -1 && msg.indexOf('WebSocket') !== -1)) {
+            return;
+          }
+          return origError.apply(console, arguments);
+        };
+
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          window.WebSocket = function(url, protocols) {
+            var isViteHmr = (protocols && (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1))) ||
+              (typeof url === 'string' && (url.indexOf('vite-hmr') !== -1 || url.indexOf('/@vite/') !== -1));
+            if (isViteHmr) {
+              var listeners = {};
+              var mockWs = {
+                readyState: 1,
+                url: url,
+                protocol: 'vite-hmr',
+                extensions: '',
+                binaryType: 'blob',
+                bufferedAmount: 0,
+                onopen: null,
+                onclose: null,
+                onerror: null,
+                onmessage: null,
+                addEventListener: function(event, handler) {
+                  listeners[event] = listeners[event] || [];
+                  listeners[event].push(handler);
+                },
+                removeEventListener: function(event, handler) {
+                  if (listeners[event]) {
+                    listeners[event] = listeners[event].filter(function(h) { return h !== handler; });
+                  }
+                },
+                dispatchEvent: function(event) {
+                  var handlers = listeners[event.type] || [];
+                  handlers.forEach(function(h) { h(event); });
+                  return true;
+                },
+                send: function() {},
+                close: function() {
+                  mockWs.readyState = 3;
+                  var evt = { type: 'close', wasClean: true, code: 1000, reason: 'HMR disabled' };
+                  if (typeof mockWs.onclose === 'function') mockWs.onclose(evt);
+                  (listeners['close'] || []).forEach(function(h) { h(evt); });
+                }
+              };
+              return mockWs;
+            }
+            return new NativeWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = NativeWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
         }
-      });
-      window.addEventListener('unhandledrejection', function(e) {
-        if (e && e.reason && String(e.reason).includes('WebSocket')) {
-          e.stopImmediatePropagation();
-        }
-      });
+
+        window.addEventListener('error', function(e) {
+          if (e && e.message && (e.message.includes('WebSocket') || e.message.includes('@vite/client'))) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+          if (e && e.reason && String(e.reason).includes('WebSocket')) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        });
+      })();
     </script>
   </head>
   <body class="mobile-canvas-bg antialiased selection:bg-black selection:text-white">
