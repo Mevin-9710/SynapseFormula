@@ -19,6 +19,7 @@ import {
   Check,
   Zap,
   Minus,
+  Sparkles,
 } from 'lucide-react';
 import {
   Flashcard,
@@ -53,6 +54,7 @@ import { appendReviewLog, removeReviewLogById } from '../services/reviewLog';
 import { FormulaDisplay, preloadFormulaRender } from './FormulaDisplay';
 import { FormattedText } from './FormattedText';
 import { Scratchpad } from './Scratchpad';
+import { DoubtAssistant } from './DoubtAssistant';
 import { BottomSheet } from './BottomSheet';
 
 interface StudySessionProps {
@@ -105,6 +107,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
   // Header "⋯" Menu & Scratchpad Draw state (5.9 & 5.13)
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [showScratchpad, setShowScratchpad] = useState(false);
+  const [isDoubtMode, setIsDoubtMode] = useState(false);
   const [confirmDeleteCurrent, setConfirmDeleteCurrent] = useState(false);
 
   // Undo last rating state + 5s Undo Toast for swipe gestures (2.6 & 5.10)
@@ -430,6 +433,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
 
   const resetCardInteractionState = () => {
     setIsRevealed(false);
+    setIsDoubtMode(false);
     setSelectedClozeOption(null);
     setSelectedInterleavedOption(null);
     setConfirmDeleteCurrent(false);
@@ -872,6 +876,21 @@ export const StudySession: React.FC<StudySessionProps> = ({
 
             <button
               type="button"
+              onClick={() => setIsDoubtMode(prev => !prev)}
+              aria-label="Circle your doubt"
+              title="Circle your doubt (AI Assistant)"
+              className={`glass-button min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
+                isDoubtMode
+                  ? 'bg-blue-600 text-white shadow-sm border-blue-500'
+                  : 'text-blue-600 dark:text-blue-400'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Circle Doubt</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 setConfirmDeleteCurrent(false);
                 setIsMoreMenuOpen(true);
@@ -1155,7 +1174,15 @@ export const StudySession: React.FC<StudySessionProps> = ({
                   {formatStatementText(currentCard.statement)}
                 </h2>
 
-                {isRevealed ? (
+                {isDoubtMode ? (
+                  <DoubtAssistant
+                    deckTitle={currentCardDeckName}
+                    card={currentCard}
+                    allDeckCards={cards}
+                    isRevealed={isRevealed}
+                    onClose={() => setIsDoubtMode(false)}
+                  />
+                ) : isRevealed ? (
                   <div className="pt-4 border-t border-black/10 dark:border-white/10 space-y-4">
                     <div className="p-4 rounded-xl bg-white/95 dark:bg-zinc-900/95 border border-black/10 dark:border-white/10 text-center">
                       <FormulaDisplay formula={currentCard.formula} size="lg" />
@@ -1191,7 +1218,21 @@ export const StudySession: React.FC<StudySessionProps> = ({
         {/* Fixed Bottom Rating Bar in Portrait / Side-by-Side in Landscape (5.8 & 5.19) */}
         <div className="fixed bottom-0 left-0 right-0 z-30 glass-chrome border-t px-4 pt-2.5 pb-safe pl-safe pr-safe landscape:static landscape:w-64 landscape:border landscape:rounded-2xl landscape:p-3 landscape:flex landscape:flex-col landscape:justify-center shrink-0">
           <div className="max-w-xl mx-auto w-full">
-            {isRevealed ? (
+            {isDoubtMode ? (
+              <div className="flex items-center justify-between gap-3 py-1">
+                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                  <Sparkles className="w-4 h-4 animate-pulse" />
+                  <span>AI Formula Tutor Active · Ask your doubt above</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsDoubtMode(false)}
+                  className="glass-button min-h-[44px] px-3.5 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Return to Card
+                </button>
+              </div>
+            ) : isRevealed ? (
               mode === 'practice' ? (
                 <button
                   type="button"
@@ -1316,6 +1357,22 @@ export const StudySession: React.FC<StudySessionProps> = ({
         subtitle={currentCardDeckName}
       >
         <div className="space-y-2.5">
+          {/* Circle Your Doubt (AI Assistant) */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsDoubtMode(true);
+              setIsMoreMenuOpen(false);
+            }}
+            className="glass-button w-full min-h-[48px] px-4 rounded-xl text-[15px] font-semibold flex items-center justify-between cursor-pointer text-blue-600 dark:text-blue-400 border border-blue-500/30"
+          >
+            <span className="flex items-center gap-2.5">
+              <Sparkles className="w-4 h-4 text-blue-500" />
+              <span>Circle Your Doubt</span>
+            </span>
+            <span className="text-[13px] font-bold text-blue-500">AI Assistant</span>
+          </button>
+
           {/* Draw / Scratchpad Toggle (placed at top, far away from Delete) */}
           <button
             type="button"
