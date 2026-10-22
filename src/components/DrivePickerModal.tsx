@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  X,
   Search,
   FileSpreadsheet,
   RefreshCw,
@@ -21,15 +20,14 @@ import {
   downloadSampleExcelTemplate,
   downloadSampleCsvTemplate,
   extractRowVariables,
+  MAX_SPREADSHEET_FILE_BYTES,
 } from '../services/excelParser';
-import {
-  VERCEL_MCP_ENDPOINT,
-  pullPendingExternalMcpDecks,
-} from '../services/mcpService';
+import { VERCEL_MCP_ENDPOINT } from '../services/mcpService';
 import { googleSignIn, getAccessToken } from '../services/auth';
 import { Deck, DriveFileItem, ColumnMapping } from '../types';
 import { FormulaDisplay } from './FormulaDisplay';
 import { ExcelGuideModal } from './ExcelGuideModal';
+import { BottomSheet } from './BottomSheet';
 
 interface DrivePickerModalProps {
   isOpen: boolean;
@@ -57,7 +55,6 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   // External MCP Server State
   const [copiedMcpConfig, setCopiedMcpConfig] = useState(false);
   const [copiedMcpUrl, setCopiedMcpUrl] = useState(false);
-  const [isSyncingMcpQueue, setIsSyncingMcpQueue] = useState(false);
 
   // Spreadsheet mapping state
   const [selectedFile, setSelectedFile] = useState<{
@@ -75,6 +72,8 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     variablesCol: '',
     explanationCol: '',
     categoryCol: '',
+    conditionsCol: '',
+    derivationCol: '',
   });
 
   useEffect(() => {
@@ -136,6 +135,10 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
 
   const handleSelectDriveFile = async (file: DriveFileItem) => {
     setError(null);
+    if (file.size && Number(file.size) > MAX_SPREADSHEET_FILE_BYTES) {
+      setError('Spreadsheet exceeds maximum file size limit (10 MB).');
+      return;
+    }
     setIsLoadingFiles(true);
     try {
       const buffer = await fetchDriveFileBinary(file.id, file.mimeType);
@@ -157,6 +160,12 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const handleLocalFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setError(null);
+
+    if (file.size > MAX_SPREADSHEET_FILE_BYTES) {
+      setError('File exceeds maximum allowed size of 10 MB.');
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = event => {
@@ -216,15 +225,18 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
       ? 'Local CSV'
       : 'Local Spreadsheet';
 
+    const now = new Date().toISOString();
     const newDeck: Deck = {
       id: deckId,
       name: deckName.trim(),
       description: `Imported from ${sourceLabel} (${selectedSheet})`,
+      sheetName: selectedSheet || 'Sheet1',
       googleDriveFileId: selectedFile.id,
       googleDriveFileName: selectedFile.name,
       googleDriveMimeType: selectedFile.mimeType,
-      googleDriveModifiedTime: new Date().toISOString(),
-      lastSyncedAt: new Date().toISOString(),
+      googleDriveModifiedTime: now,
+      lastSyncedAt: now,
+      createdAt: now,
       syncIntervalHours: 24,
       columnMapping: mapping,
       cardsCount: cards.length,
@@ -235,32 +247,12 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         remainingQueueIds: cards.map(c => c.id),
         totalInSession: cards.length,
         completedInSession: 0,
-        lastStudiedAt: new Date().toISOString(),
+        lastStudiedAt: now,
       },
     };
 
     onDeckCreated(newDeck, cards);
     onClose();
-  };
-
-  const handleSyncExternalMcpQueue = async () => {
-    setError(null);
-    setIsSyncingMcpQueue(true);
-    try {
-      const pending = await pullPendingExternalMcpDecks();
-      if (pending.length === 0) {
-        setError('No queued decks found on the MCP endpoint yet.');
-      } else {
-        for (const item of pending) {
-          onDeckCreated(item.deck, item.cards);
-        }
-        onClose();
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Could not sync from MCP endpoint.');
-    } finally {
-      setIsSyncingMcpQueue(false);
-    }
   };
 
   const mcpConfigJson = JSON.stringify(
@@ -288,53 +280,74 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     setTimeout(() => setCopiedMcpUrl(false), 2000);
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-xs">
-      <div className="glass-card rounded-t-3xl sm:rounded-2xl w-full max-w-lg max-h-[92vh] overflow-hidden flex flex-col border border-black/10 shadow-2xl animate-in slide-in-from-bottom duration-200">
-        {/* Header */}
-        <div className="px-4 py-3.5 border-b border-black/10 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+    <>
+      <BottomSheet
+        isOpen={isOpen}
+        onClose={onClose}
+        title={
+          <span className="flex items-center gap-2">
             {step === 'configure' ? (
-              <FileSpreadsheet className="w-4 h-4 text-black" />
+              <FileSpreadsheet className="w-4 h-4" />
             ) : sourceTab === 'mcp' ? (
-              <Terminal className="w-4 h-4 text-indigo-600" />
+              <Terminal className="w-4 h-4" />
             ) : sourceTab === 'drive' ? (
-              <Cloud className="w-4 h-4 text-black" />
+              <Cloud className="w-4 h-4" />
             ) : (
-              <Upload className="w-4 h-4 text-black" />
+              <Upload className="w-4 h-4" />
             )}
-            <span className="text-sm font-bold text-black">
-              {step === 'configure' ? 'Map Columns' : 'Add Formula Deck'}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 -mr-2 rounded-xl text-black/50 hover:text-black cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Clean 3-Tab Switcher (only shown in 'select' step) */}
-        {step === 'select' && (
-          <div className="px-4 pt-3">
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-black/[0.05] border border-black/5">
+            <span>{step === 'configure' ? 'Map Columns' : 'Import Formula Deck'}</span>
+          </span>
+        }
+        subtitle="External MCP, Google Drive Sheets/Excel, or local spreadsheet"
+        footer={
+          step === 'configure' ? (
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setStep('select')}
+                className="glass-button flex-1 min-h-[48px] px-4 rounded-xl text-[15px] font-semibold cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImport}
+                className="glass-button-primary flex-1 min-h-[48px] px-5 rounded-xl text-[15px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>Create Deck</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className="glass-button w-full min-h-[48px] rounded-xl text-[15px] font-semibold cursor-pointer"
+            >
+              Close
+            </button>
+          )
+        }
+      >
+        <div className="space-y-4">
+          {/* Clean 3-Tab Switcher (only shown in 'select' step) */}
+          {step === 'select' && (
+            <div className="grid grid-cols-3 gap-2 p-1 rounded-2xl glass-panel">
               <button
                 type="button"
                 onClick={() => {
                   setError(null);
                   setSourceTab('mcp');
                 }}
-                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                className={`min-h-[44px] px-2 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   sourceTab === 'mcp'
-                    ? 'bg-white text-indigo-600 shadow-2xs border border-black/5'
-                    : 'text-black/55 hover:text-black'
+                    ? 'glass-button-primary'
+                    : 'text-secondary-contrast'
                 }`}
               >
-                <Terminal className="w-3.5 h-3.5 shrink-0" />
-                <span>External MCP</span>
+                <Terminal className="w-4 h-4 shrink-0" />
+                <span>MCP</span>
               </button>
 
               <button
@@ -343,13 +356,13 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                   setError(null);
                   setSourceTab('drive');
                 }}
-                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                className={`min-h-[44px] px-2 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   sourceTab === 'drive'
-                    ? 'bg-white text-black shadow-2xs border border-black/5'
-                    : 'text-black/55 hover:text-black'
+                    ? 'glass-button-primary'
+                    : 'text-secondary-contrast'
                 }`}
               >
-                <Cloud className="w-3.5 h-3.5 shrink-0" />
+                <Cloud className="w-4 h-4 shrink-0" />
                 <span>Drive</span>
               </button>
 
@@ -359,105 +372,90 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                   setError(null);
                   setSourceTab('local');
                 }}
-                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                className={`min-h-[44px] px-2 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   sourceTab === 'local'
-                    ? 'bg-white text-black shadow-2xs border border-black/5'
-                    : 'text-black/55 hover:text-black'
+                    ? 'glass-button-primary'
+                    : 'text-secondary-contrast'
                 }`}
               >
-                <Upload className="w-3.5 h-3.5 shrink-0" />
+                <Upload className="w-4 h-4 shrink-0" />
                 <span>File / CSV</span>
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {error && (
-          <div className="mx-4 mt-3 p-2.5 rounded-xl bg-red-50 text-xs text-red-900 flex items-center gap-2 border border-red-200">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-            <span className="leading-snug">{error}</span>
-          </div>
-        )}
+          {error && (
+            <div className="p-3 rounded-xl glass-panel text-[13px] font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span className="leading-snug">{error}</span>
+            </div>
+          )}
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {step === 'select' ? (
             <>
-              {/* TAB 1: EXTERNAL MCP SERVER CONNECTION ONLY */}
+              {/* TAB 1: EXTERNAL MCP SERVER CONNECTION ONLY (4.1: No shared queue) */}
               {sourceTab === 'mcp' && (
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-3.5 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Terminal className="w-4 h-4 text-indigo-600 shrink-0" />
-                        <span className="text-xs font-bold text-black truncate">
-                          External MCP Server Link
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleSyncExternalMcpQueue}
-                        disabled={isSyncingMcpQueue}
-                        className="glass-button-primary px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
-                      >
-                        <RefreshCw
-                          className={`w-3 h-3 ${isSyncingMcpQueue ? 'animate-spin' : ''}`}
-                        />
-                        <span>Pull MCP Queue</span>
-                      </button>
-                    </div>
+                <div className="rounded-2xl glass-panel p-4 space-y-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Terminal className="w-4 h-4 shrink-0" />
+                    <span className="text-[15px] font-bold truncate">
+                      External MCP Server Link
+                    </span>
+                  </div>
 
-                    <p className="text-[11px] text-black/65 leading-relaxed">
-                      Connect Gemini CLI, Claude Desktop, or Cursor to directly create decks via the <code className="font-mono font-bold text-indigo-700">create_formula_deck</code> MCP tool on your hosted Vercel domain:
-                    </p>
+                  <p className="text-[13px] text-secondary-contrast leading-relaxed">
+                    Connect Gemini CLI, Claude Desktop, or Cursor to create decks via the{' '}
+                    <code className="font-mono font-bold">create_formula_deck</code> MCP tool. It
+                    returns a private 1-click <code className="font-mono">?mcp_deck=</code>{' '}
+                    confirmation link (up to 200 formulas per deck):
+                  </p>
 
-                    {/* Hosted Vercel MCP Endpoint Pill */}
-                    <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white border border-black/10">
-                      <code className="text-[11px] font-mono text-black truncate">
-                        {VERCEL_MCP_ENDPOINT}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={handleCopyMcpUrl}
-                        className="glass-button px-2 py-1 rounded-md text-[10px] font-bold text-black flex items-center gap-1 shrink-0 cursor-pointer"
-                      >
-                        {copiedMcpUrl ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            <span>Copied URL</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            <span>Copy URL</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
+                  {/* Hosted Vercel MCP Endpoint */}
+                  <div className="flex items-center justify-between gap-2 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15">
+                    <code className="text-xs font-mono truncate">
+                      {VERCEL_MCP_ENDPOINT}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopyMcpUrl}
+                      className="glass-button min-h-[44px] px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      {copiedMcpUrl ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy URL</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
 
-                    {/* MCP Client Config Snippet */}
-                    <div className="relative">
-                      <pre className="p-3 rounded-xl bg-black text-emerald-300 text-[10px] overflow-x-auto font-mono leading-relaxed">
-                        {mcpConfigJson}
-                      </pre>
-                      <button
-                        type="button"
-                        onClick={handleCopyMcpConfig}
-                        className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/15 hover:bg-white/25 text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
-                      >
-                        {copiedMcpConfig ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-400" />
-                            <span>Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            <span>Copy Config</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
+                  {/* MCP Client Config Snippet */}
+                  <div className="space-y-2">
+                    <pre className="p-3 rounded-xl bg-black text-emerald-300 text-xs overflow-x-auto font-mono leading-relaxed">
+                      {mcpConfigJson}
+                    </pre>
+                    <button
+                      type="button"
+                      onClick={handleCopyMcpConfig}
+                      className="glass-button w-full min-h-[44px] px-3 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedMcpConfig ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>Copied MCP JSON Config</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          <span>Copy MCP JSON Config</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
               )}
@@ -466,15 +464,19 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               {sourceTab === 'drive' && (
                 <>
                   {!isAuthenticated ? (
-                    <div className="text-center py-8 px-4 glass-panel rounded-2xl border border-black/10 space-y-3">
-                      <Cloud className="w-7 h-7 text-black/50 mx-auto" />
-                      <p className="text-xs text-black/70 max-w-xs mx-auto leading-relaxed">
-                        Sign in with Google to import from Google Sheets, Excel, or CSV files and auto-sync changes.
+                    <div className="text-center py-6 px-4 glass-panel rounded-2xl space-y-3">
+                      <Cloud className="w-8 h-8 mx-auto opacity-70" />
+                      <p className="text-[15px] font-semibold max-w-xs mx-auto leading-relaxed">
+                        Connect Google Drive to import and re-sync your physics spreadsheets.
+                      </p>
+                      <p className="text-[13px] text-secondary-contrast max-w-xs mx-auto leading-snug">
+                        Uses read-only spreadsheet access (<code className="font-mono">drive.readonly</code>) strictly in memory so multi-sheet Excel & Google Sheets can be re-synced without modifying your Drive files.
                       </p>
                       <button
+                        type="button"
                         onClick={handleSignIn}
                         disabled={isAuthenticating}
-                        className="glass-button-primary w-full h-11 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
+                        className="glass-button-primary w-full min-h-[48px] rounded-xl text-[15px] font-bold flex items-center justify-center gap-2 cursor-pointer"
                       >
                         {isAuthenticating ? 'Connecting...' : 'Sign in with Google Drive'}
                       </button>
@@ -483,29 +485,32 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                     <div className="space-y-3">
                       <div className="flex items-center gap-2">
                         <div className="relative flex-1">
-                          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-black/40" />
+                          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 opacity-60" />
                           <input
-                            type="text"
+                            type="search"
+                            enterKeyHint="search"
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && loadDriveFiles()}
                             placeholder="Search Google Sheets, Excel, CSV..."
-                            className="w-full pl-8 pr-3 py-2 rounded-xl text-xs bg-white border border-black/15 focus:outline-none"
+                            className="w-full min-h-[44px] pl-10 pr-3.5 py-2 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15 focus:outline-none"
                           />
                         </div>
                         <button
+                          type="button"
                           onClick={loadDriveFiles}
-                          className="p-2 glass-button rounded-xl text-black cursor-pointer"
+                          aria-label="Refresh Drive files"
+                          className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
                         >
                           <RefreshCw
-                            className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin' : ''}`}
+                            className={`w-4 h-4 ${isLoadingFiles ? 'animate-spin' : ''}`}
                           />
                         </button>
                       </div>
 
-                      <div className="space-y-1.5 max-h-[260px] overflow-y-auto">
+                      <div className="space-y-2 max-h-[280px] overflow-y-auto overscroll-contain">
                         {isLoadingFiles ? (
-                          <div className="py-8 text-center text-xs text-black/50">
+                          <div className="py-8 text-center text-[15px] text-secondary-contrast">
                             Loading Drive spreadsheets...
                           </div>
                         ) : driveFiles.length > 0 ? (
@@ -516,40 +521,29 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                               file.name.endsWith('.csv') || file.mimeType?.includes('csv');
 
                             return (
-                              <div
+                              <button
                                 key={file.id}
+                                type="button"
                                 onClick={() => handleSelectDriveFile(file)}
-                                className="glass-panel rounded-xl p-3 flex items-center justify-between cursor-pointer hover:bg-black/5 transition-colors gap-2"
+                                className="glass-panel w-full text-left rounded-xl p-3.5 min-h-[54px] flex items-center justify-between cursor-pointer gap-2"
                               >
                                 <div className="truncate pr-2 min-w-0">
-                                  <div className="flex items-center gap-1.5 mb-0.5">
-                                    <p className="text-xs font-bold text-black truncate">
-                                      {file.name}
-                                    </p>
-                                    <span
-                                      className={`shrink-0 px-1.5 py-0.2 rounded text-[9px] font-semibold ${
-                                        isGSheet
-                                          ? 'bg-emerald-100 text-emerald-800'
-                                          : isCsv
-                                          ? 'bg-sky-100 text-sky-800'
-                                          : 'bg-black/10 text-black'
-                                      }`}
-                                    >
-                                      {isGSheet ? 'Sheet' : isCsv ? 'CSV' : 'Excel'}
-                                    </span>
-                                  </div>
-                                  <p className="text-[10px] text-black/40">
+                                  <p className="text-[15px] font-bold truncate">
+                                    {file.name}
+                                  </p>
+                                  <p className="text-xs text-secondary-contrast mt-0.5">
+                                    {isGSheet ? 'Google Sheet' : isCsv ? 'CSV' : 'Excel'} ·{' '}
                                     {new Date(file.modifiedTime).toLocaleDateString()}
                                   </p>
                                 </div>
-                                <span className="text-[11px] font-bold text-black shrink-0">
+                                <span className="text-[13px] font-bold shrink-0">
                                   Select →
                                 </span>
-                              </div>
+                              </button>
                             );
                           })
                         ) : (
-                          <div className="py-8 text-center text-xs text-black/50 border border-dashed border-black/15 rounded-xl">
+                          <div className="py-8 text-center text-[15px] text-secondary-contrast border border-dashed border-black/15 dark:border-white/15 rounded-xl">
                             No spreadsheets found in Drive.
                           </div>
                         )}
@@ -562,16 +556,16 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               {/* TAB 3: LOCAL FILE / TEMPLATES */}
               {sourceTab === 'local' && (
                 <div className="space-y-3">
-                  <label className="glass-panel rounded-2xl py-8 px-4 border border-dashed border-black/25 flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-black/[0.03] transition-colors text-center">
-                    <div className="w-10 h-10 rounded-xl bg-black/5 flex items-center justify-center text-black">
+                  <label className="glass-panel rounded-2xl py-8 px-4 border border-dashed border-black/25 dark:border-white/25 flex flex-col items-center justify-center gap-2.5 cursor-pointer text-center">
+                    <div className="w-11 h-11 rounded-xl bg-black/5 dark:bg-white/10 flex items-center justify-center">
                       <Upload className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-black">
-                        Choose Spreadsheet or CSV File
+                      <p className="text-[15px] font-bold">
+                        Choose Spreadsheet or CSV File (≤10 MB)
                       </p>
-                      <p className="text-[11px] text-black/50 mt-0.5">
-                        Supports .xlsx, .csv, .tsv, and .ods with LaTeX & variable meanings
+                      <p className="text-[13px] text-secondary-contrast mt-0.5">
+                        Supports .xlsx, .csv, .tsv, and .ods with LaTeX, Conditions & Derivations
                       </p>
                     </div>
                     <input
@@ -582,60 +576,57 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                     />
                   </label>
 
-                  {/* Compact Template & Format Bar */}
-                  <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-black/[0.02] border border-black/10">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={downloadSampleExcelTemplate}
-                        className="glass-button px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-black flex items-center gap-1 cursor-pointer"
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>.XLSX Template</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={downloadSampleCsvTemplate}
-                        className="glass-button px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-black flex items-center gap-1 cursor-pointer"
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>.CSV Template</span>
-                      </button>
-                    </div>
-
+                  {/* Template & Format Bar (all buttons >= 44px) */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={downloadSampleExcelTemplate}
+                      className="glass-button min-h-[44px] px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>.XLSX</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadSampleCsvTemplate}
+                      className="glass-button min-h-[44px] px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>.CSV</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setIsGuideOpen(true)}
-                      className="text-[11px] font-bold text-black/70 hover:text-black flex items-center gap-1 px-2 py-1 cursor-pointer"
+                      className="glass-button min-h-[44px] px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
                     >
-                      <HelpCircle className="w-3.5 h-3.5" />
-                      <span>Format Guide</span>
+                      <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>Guide</span>
                     </button>
                   </div>
                 </div>
               )}
             </>
           ) : (
-            /* Configure Step for Drive or Local Spreadsheets */
-            <div className="space-y-3 text-xs">
+            /* Configure Step for Drive or Local Spreadsheets (all inputs/selects 16px text-base) */
+            <div className="space-y-3 text-[13px]">
               <div>
-                <label className="block text-[11px] font-bold text-black mb-1">Deck Title</label>
+                <label className="block text-[13px] font-bold mb-1">Deck Title</label>
                 <input
                   type="text"
                   value={deckName}
                   onChange={e => setDeckName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-white border border-black/15 focus:outline-none"
+                  className="w-full min-h-[44px] px-3 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-black mb-1">
-                  Worksheet Tab
+                <label className="block text-[13px] font-bold mb-1">
+                  Worksheet Tab (Saved for Drive Re-Sync)
                 </label>
                 <select
                   value={selectedSheet}
                   onChange={e => handleSheetChange(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-white border border-black/15 focus:outline-none"
+                  className="w-full min-h-[44px] px-3 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15 focus:outline-none"
                 >
                   {parsedSummary?.sheetNames.map((s: string) => (
                     <option key={s} value={s}>
@@ -645,15 +636,13 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                 <div>
-                  <label className="block text-[10px] font-bold text-black mb-1">
-                    Statement Column *
-                  </label>
+                  <label className="block text-xs font-bold mb-1">Statement Column *</label>
                   <select
                     value={mapping.statementCol}
                     onChange={e => setMapping({ ...mapping, statementCol: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs bg-white border border-black/15"
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
                   >
                     {parsedSummary?.headers.map((h: string) => (
                       <option key={h} value={h}>
@@ -664,13 +653,11 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-black mb-1">
-                    Formula Column *
-                  </label>
+                  <label className="block text-xs font-bold mb-1">Formula Column *</label>
                   <select
                     value={mapping.formulaCol}
                     onChange={e => setMapping({ ...mapping, formulaCol: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs bg-white border border-black/15"
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
                   >
                     {parsedSummary?.headers.map((h: string) => (
                       <option key={h} value={h}>
@@ -681,19 +668,17 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[10px] font-bold text-black mb-1">
-                    Variables Column
-                  </label>
+                  <label className="block text-xs font-bold mb-1">Variables Column</label>
                   <select
                     value={mapping.variablesCol || ''}
                     onChange={e =>
                       setMapping({ ...mapping, variablesCol: e.target.value || undefined })
                     }
-                    className="w-full px-2 py-1.5 rounded-lg text-xs bg-white border border-black/15"
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
                   >
-                    <option value="">(Auto-detect Symbol_1...5 or None)</option>
+                    <option value="">(Auto-detect Variable_1...5)</option>
                     {parsedSummary?.headers.map((h: string) => (
                       <option key={h} value={h}>
                         {h}
@@ -703,15 +688,51 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-black mb-1">
-                    Explanation Column
-                  </label>
+                  <label className="block text-xs font-bold mb-1">Conditions Column</label>
+                  <select
+                    value={mapping.conditionsCol || ''}
+                    onChange={e =>
+                      setMapping({ ...mapping, conditionsCol: e.target.value || undefined })
+                    }
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
+                  >
+                    <option value="">(None)</option>
+                    {parsedSummary?.headers.map((h: string) => (
+                      <option key={h} value={h}>
+                        {h}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Derivation Column</label>
+                  <select
+                    value={mapping.derivationCol || ''}
+                    onChange={e =>
+                      setMapping({ ...mapping, derivationCol: e.target.value || undefined })
+                    }
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
+                  >
+                    <option value="">(None)</option>
+                    {parsedSummary?.headers.map((h: string) => (
+                      <option key={h} value={h}>
+                        {h}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Explanation Column</label>
                   <select
                     value={mapping.explanationCol || ''}
                     onChange={e =>
                       setMapping({ ...mapping, explanationCol: e.target.value || undefined })
                     }
-                    className="w-full px-2 py-1.5 rounded-lg text-xs bg-white border border-black/15"
+                    className="w-full min-h-[44px] px-2.5 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15"
                   >
                     <option value="">(None)</option>
                     {parsedSummary?.headers.map((h: string) => (
@@ -727,34 +748,43 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               {parsedSummary?.sampleRows &&
                 parsedSummary.sampleRows.length > 0 &&
                 (() => {
-                  const sampleVars = extractRowVariables(parsedSummary.sampleRows[0], mapping);
+                  const sampleRow = parsedSummary.sampleRows[0];
+                  const sampleVars = extractRowVariables(sampleRow, mapping);
+                  const sampleCond = mapping.conditionsCol ? sampleRow[mapping.conditionsCol] : '';
+                  const sampleDeriv = mapping.derivationCol ? sampleRow[mapping.derivationCol] : '';
                   return (
                     <div className="space-y-1.5 pt-2">
-                      <span className="text-[10px] text-black/50 uppercase font-bold block">
+                      <span className="text-xs text-secondary-contrast uppercase font-bold block">
                         Card Preview (Row 1)
                       </span>
-                      <div className="p-3 rounded-xl bg-white border border-black/10 space-y-2 shadow-2xs">
-                        <p className="font-bold text-black break-words leading-snug">
-                          {parsedSummary.sampleRows[0][mapping.statementCol] ||
-                            'No statement selected'}
+                      <div className="p-3.5 rounded-2xl glass-panel space-y-2">
+                        <p className="font-bold text-[15px] break-words leading-snug">
+                          {sampleRow[mapping.statementCol] || 'No statement selected'}
                         </p>
-                        <div className="py-1 px-2 rounded-lg bg-black/[0.03] text-center overflow-x-auto">
+                        <div className="py-2 px-3 rounded-xl bg-white/90 dark:bg-zinc-900/90 text-center">
                           <FormulaDisplay
-                            formula={parsedSummary.sampleRows[0][mapping.formulaCol] || ''}
+                            formula={sampleRow[mapping.formulaCol] || ''}
                             size="sm"
                           />
                         </div>
+                        {sampleCond && (
+                          <p className="text-[13px] px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
+                            <strong>Conditions:</strong> {sampleCond}
+                          </p>
+                        )}
+                        {sampleDeriv && (
+                          <p className="text-[13px] text-secondary-contrast px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
+                            <strong>Derivation:</strong> {sampleDeriv}
+                          </p>
+                        )}
                         {sampleVars.length > 0 && (
-                          <div className="pt-1.5 border-t border-black/5 space-y-1">
-                            <span className="text-[10px] font-semibold text-black/50 block">
-                              Detected Variable Meanings ({sampleVars.length}):
+                          <div className="pt-2 border-t border-black/10 dark:border-white/10 space-y-1">
+                            <span className="text-xs font-semibold text-secondary-contrast block">
+                              Detected Variables ({sampleVars.length}):
                             </span>
                             {sampleVars.map((v, idx) => (
-                              <div
-                                key={idx}
-                                className="text-[11px] flex items-baseline gap-1.5 text-black/80"
-                              >
-                                <span className="font-bold text-black shrink-0">
+                              <div key={idx} className="text-[13px] flex items-baseline gap-1.5">
+                                <span className="font-bold shrink-0">
                                   <FormulaDisplay
                                     formula={v.symbol}
                                     displayMode={false}
@@ -762,11 +792,6 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                                   />
                                 </span>
                                 <span>— {v.meaning}</span>
-                                {v.unit && (
-                                  <span className="text-[10px] text-black/50 font-mono">
-                                    [{v.unit}]
-                                  </span>
-                                )}
                               </div>
                             ))}
                           </div>
@@ -778,37 +803,9 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
             </div>
           )}
         </div>
-
-        {/* Modal Footer */}
-        <div className="p-3 border-t border-black/10 flex items-center justify-between pb-safe">
-          {step === 'configure' ? (
-            <>
-              <button
-                onClick={() => setStep('select')}
-                className="glass-button h-11 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                Back
-              </button>
-              <button
-                onClick={handleConfirmImport}
-                className="glass-button-primary h-11 px-5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
-                Create Deck
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={onClose}
-              className="glass-button w-full h-11 rounded-xl text-xs font-semibold cursor-pointer"
-            >
-              Close
-            </button>
-          )}
-        </div>
-      </div>
+      </BottomSheet>
 
       <ExcelGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
-    </div>
+    </>
   );
 };

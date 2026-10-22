@@ -1,38 +1,38 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 
+const ALLOWED_CORS_ORIGIN = 'https://synapse-formula.vercel.app';
+const MAX_FORMULAS_PER_DECK = 200;
+const MAX_BODY_BYTES = 512 * 1024; // 512 KB request body limit
+
+interface SanitizedFormulaItem {
+  statement: string;
+  formula: string;
+  variables?: Array<{ symbol: string; meaning: string; unit?: string }>;
+  conditions?: string;
+  derivation?: string;
+  explanation?: string;
+  category?: string;
+}
+
 interface GeneratedDeckPayload {
   id: string;
   deckName: string;
   description: string;
-  formulas: Array<{
-    statement: string;
-    formula: string;
-    variables?: Array<{ symbol: string; meaning: string; unit?: string }>;
-    explanation?: string;
-    category?: string;
-  }>;
+  formulas: SanitizedFormulaItem[];
   createdAt: string;
   source: 'external-mcp';
-}
-
-// Global queue across warm serverless invocations on Vercel
-const globalStore = globalThis as unknown as {
-  __synapsePendingMcpDecks?: GeneratedDeckPayload[];
-};
-if (!globalStore.__synapsePendingMcpDecks) {
-  globalStore.__synapsePendingMcpDecks = [];
 }
 
 const TOOL_SCHEMA = {
   name: 'create_formula_deck',
   description:
-    'Creates a complete scientific, mathematical, or engineering formula flashcard deck in SynapseFormula (https://synapse-formula.vercel.app) with LaTeX expressions and variable definitions.',
+    'Creates a complete scientific, mathematical, or engineering formula flashcard deck in SynapseFormula (https://synapse-formula.vercel.app) with LaTeX expressions, variable definitions, validity conditions, and derivations.',
   inputSchema: {
     type: 'object',
     properties: {
       deckName: {
         type: 'string',
-        description: 'Title for the formula deck (e.g., "Classical Electrodynamics").',
+        description: 'Title for the formula deck (max 200 chars, e.g., "Classical Electrodynamics").',
       },
       description: {
         type: 'string',
@@ -40,7 +40,7 @@ const TOOL_SCHEMA = {
       },
       formulas: {
         type: 'array',
-        description: 'List of formula flashcards in this deck.',
+        description: 'List of formula flashcards in this deck (max 200 formulas).',
         items: {
           type: 'object',
           properties: {
@@ -76,6 +76,14 @@ const TOOL_SCHEMA = {
                 required: ['symbol', 'meaning'],
               },
             },
+            conditions: {
+              type: 'string',
+              description: 'Optional validity conditions (e.g., "constant acceleration only").',
+            },
+            derivation: {
+              type: 'string',
+              description: 'Optional concise derivation steps shown after reveal.',
+            },
             explanation: {
               type: 'string',
               description: 'Brief intuition, boundary condition, or physical significance.',
@@ -93,9 +101,17 @@ const TOOL_SCHEMA = {
   },
 };
 
+function boundString(val: unknown, maxLen: number, fallback = ''): string {
+  const s = typeof val === 'string' ? val.trim() : String(val ?? fallback).trim();
+  return s.slice(0, maxLen);
+}
+
 async function readParsedBody(req: IncomingMessage & { body?: any }): Promise<any> {
   if (req.body !== undefined && req.body !== null) {
     if (typeof req.body === 'string') {
+      if (req.body.length > MAX_BODY_BYTES) {
+        throw new Error('Payload too large');
+      }
       try {
         return JSON.parse(req.body);
       } catch {
@@ -103,6 +119,9 @@ async function readParsedBody(req: IncomingMessage & { body?: any }): Promise<an
       }
     }
     if (Buffer.isBuffer(req.body)) {
+      if (req.body.byteLength > MAX_BODY_BYTES) {
+        throw new Error('Payload too large');
+      }
       try {
         return JSON.parse(req.body.toString('utf8'));
       } catch {
@@ -112,10 +131,17 @@ async function readParsedBody(req: IncomingMessage & { body?: any }): Promise<an
     return req.body;
   }
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     req.on('data', chunk => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buf.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        reject(new Error('Payload too large'));
+        return;
+      }
+      chunks.push(buf);
     });
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8').trim();
@@ -130,10 +156,9 @@ async function readParsedBody(req: IncomingMessage & { body?: any }): Promise<an
   });
 }
 
-function handleSingleRpcMessage(msg: any, pendingQueue: GeneratedDeckPayload[]): any | null {
+function handleSingleRpcMessage(msg: any): any | null {
   const { jsonrpc, id, method, params } = msg || {};
 
-  // Notifications (such as notifications/initialized or notifications/cancelled) have no id
   if (
     id === undefined ||
     method === 'notifications/initialized' ||
@@ -159,10 +184,10 @@ function handleSingleRpcMessage(msg: any, pendingQueue: GeneratedDeckPayload[]):
         },
         serverInfo: {
           name: 'synapseformula-mcp-server',
-          version: '1.0.0',
+          version: '1.1.0',
         },
         instructions:
-          'Use create_formula_deck to build scientific, math, or physics formula flashcard decks in SynapseFormula with LaTeX expressions and variable meanings. Always share the returned importUrl with the user so they can open or sync the deck.',
+          'Use create_formula_deck to build scientific, math, or physics formula flashcard decks in SynapseFormula with LaTeX expressions and variable meanings. Share the returned importUrl with the user so they can confirm and import the deck.',
       },
     };
   }
@@ -220,18 +245,61 @@ function handleSingleRpcMessage(msg: any, pendingQueue: GeneratedDeckPayload[]):
     const args = params?.arguments || {};
 
     if (toolName === 'create_formula_deck') {
+      const rawFormulas = Array.isArray(args.formulas) ? args.formulas : [];
+      if (rawFormulas.length === 0) {
+        return {
+          jsonrpc: jsonrpc || '2.0',
+          id,
+          error: {
+            code: -32602,
+            message: 'formulas array must contain at least 1 formula.',
+          },
+        };
+      }
+      if (rawFormulas.length > MAX_FORMULAS_PER_DECK) {
+        return {
+          jsonrpc: jsonrpc || '2.0',
+          id,
+          error: {
+            code: -32602,
+            message: `Deck exceeds maximum limit of ${MAX_FORMULAS_PER_DECK} formulas.`,
+          },
+        };
+      }
+
+      const sanitizedFormulas: SanitizedFormulaItem[] = rawFormulas
+        .filter((f: any) => f && f.statement && f.formula)
+        .slice(0, MAX_FORMULAS_PER_DECK)
+        .map((f: any) => ({
+          statement: boundString(f.statement, 1000, 'Formula'),
+          formula: boundString(f.formula, 1000, 'x'),
+          variables: Array.isArray(f.variables)
+            ? f.variables
+                .filter((v: any) => v && v.symbol && v.meaning)
+                .slice(0, 20)
+                .map((v: any) => ({
+                  symbol: boundString(v.symbol, 120),
+                  meaning: boundString(v.meaning, 300),
+                  unit: v.unit ? boundString(v.unit, 80) : undefined,
+                }))
+            : undefined,
+          conditions: f.conditions ? boundString(f.conditions, 500) : undefined,
+          derivation: f.derivation ? boundString(f.derivation, 1000) : undefined,
+          explanation: f.explanation ? boundString(f.explanation, 1000) : undefined,
+          category: f.category ? boundString(f.category, 120) : undefined,
+        }));
+
       const deckPayload: GeneratedDeckPayload = {
         id: `mcp_deck_${Date.now()}`,
-        deckName: String(args.deckName || 'MCP Generated Deck'),
-        description: String(args.description || 'Created via External MCP'),
-        formulas: Array.isArray(args.formulas) ? args.formulas : [],
+        deckName: boundString(args.deckName, 200, 'MCP Generated Deck'),
+        description: boundString(args.description, 600, 'Created via External MCP'),
+        formulas: sanitizedFormulas,
         createdAt: new Date().toISOString(),
         source: 'external-mcp',
       };
-      pendingQueue.push(deckPayload);
 
       const encoded = Buffer.from(JSON.stringify(deckPayload)).toString('base64url');
-      const directUrl = `https://synapse-formula.vercel.app/?mcp_deck=${encoded}`;
+      const directUrl = `${ALLOWED_CORS_ORIGIN}/?mcp_deck=${encoded}`;
 
       return {
         jsonrpc: jsonrpc || '2.0',
@@ -240,11 +308,10 @@ function handleSingleRpcMessage(msg: any, pendingQueue: GeneratedDeckPayload[]):
           content: [
             {
               type: 'text',
-              text: `Created formula deck "${deckPayload.deckName}" (${deckPayload.formulas.length} formulas).\n\n1-Click Import Link: ${directUrl}\n(Or click "Pull MCP Queue" inside https://synapse-formula.vercel.app)`,
+              text: `Created formula deck "${deckPayload.deckName}" (${deckPayload.formulas.length} formulas).\n\nImport Link: ${directUrl}`,
             },
           ],
           isError: false,
-          deck: deckPayload,
           importUrl: directUrl,
         },
       };
@@ -271,10 +338,8 @@ export default async function handler(
   req: IncomingMessage & { body?: any; query?: any },
   res: ServerResponse
 ) {
-  const origin = req.headers.origin || '*';
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_CORS_ORIGIN);
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE');
   res.setHeader(
     'Access-Control-Allow-Headers',
     'Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, User-Agent, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Session-Id, Last-Event-ID'
@@ -295,53 +360,49 @@ export default async function handler(
     return res.end();
   }
 
-  const pendingQueue = globalStore.__synapsePendingMcpDecks!;
-
   if (req.method === 'GET') {
-    const urlObj = new URL(req.url || '/api/mcp', 'https://synapse-formula.vercel.app');
-    if (urlObj.searchParams.get('action') === 'pending') {
-      const decks = [...pendingQueue];
-      pendingQueue.length = 0;
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      return res.end(JSON.stringify({ decks }));
-    }
-
+    const urlObj = new URL(req.url || '/api/mcp', ALLOWED_CORS_ORIGIN);
     if (urlObj.searchParams.get('action') === 'manifest') {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.end(
         JSON.stringify({
           protocolVersion: '2025-03-26',
-          endpoint: 'https://synapse-formula.vercel.app/api/mcp',
+          endpoint: `${ALLOWED_CORS_ORIGIN}/api/mcp`,
           tools: [TOOL_SCHEMA],
-          pendingDecksCount: pendingQueue.length,
         })
       );
     }
 
-    // Per MCP Streamable HTTP specification (2025-03-26 / 2025-06-18):
-    // When a client probes GET for a standalone SSE stream and the server uses stateless HTTP POST,
-    // the server MUST return 405 Method Not Allowed.
     res.statusCode = 405;
     res.setHeader('Allow', 'POST, OPTIONS, DELETE');
     return res.end();
   }
 
   if (req.method === 'POST') {
-    const body = await readParsedBody(req);
+    let body: any;
+    try {
+      body = await readParsedBody(req);
+    } catch {
+      res.statusCode = 413;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32600, message: 'Payload exceeds maximum size limit.' },
+        })
+      );
+    }
+
     const sessionId =
       (req.headers['mcp-session-id'] as string) || 'synapseformula-mcp-session-v1';
     res.setHeader('Mcp-Session-Id', sessionId);
 
-    // Handle batch or single JSON-RPC payload
     const isBatch = Array.isArray(body);
-    const messages = isBatch ? body : [body];
-    const responses = messages
-      .map(msg => handleSingleRpcMessage(msg, pendingQueue))
-      .filter(Boolean);
+    const messages: any[] = isBatch ? body : [body];
+    const responses = messages.map((msg: any) => handleSingleRpcMessage(msg)).filter(Boolean);
 
-    // If all messages were notifications (e.g. notifications/initialized), return 202 Accepted with empty body
     if (responses.length === 0) {
       res.statusCode = 202;
       return res.end();
@@ -350,7 +411,6 @@ export default async function handler(
     const responsePayload = isBatch ? responses : responses[0];
     const acceptHeader = String(req.headers.accept || '');
 
-    // If client explicitly requests SSE stream format without application/json, or prefers event-stream
     if (
       acceptHeader.includes('text/event-stream') &&
       !acceptHeader.includes('application/json')

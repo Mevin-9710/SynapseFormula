@@ -5,9 +5,38 @@ export interface VariableDefinition {
 }
 
 export type CardStage = 'statement' | 'cloze' | 'variables';
-export type CardState = 'new' | 'learning' | 'review' | 'mastered';
+export type CardState = 'new' | 'learning' | 'review';
 export type SrsRating = 'first-time' | 'again' | 'hard' | 'good' | 'easy';
-export type StudySessionMode = 'recall' | 'first-time' | 'due-continuous';
+export type StudySessionMode =
+  | 'recall'
+  | 'first-time'
+  | 'due-continuous'
+  | 'practice'
+  | 'interleaved'
+  | 'drill';
+
+export interface UserSettings {
+  maxIntervalDays: number; // default 4
+  newCardsPerDay: number;  // default 25
+  dailyReviewCap: number;  // default 150
+  examDate?: string;       // YYYY-MM-DD
+  reminderTime?: string;   // HH:MM (24h)
+  remindersEnabled?: boolean;
+  swipeGesturesEnabled?: boolean; // default false (5.10)
+  hapticsEnabled?: boolean;       // default true (5.12)
+  reduceEffects?: boolean;        // default false (5.20)
+}
+
+export interface ReviewLogEntry {
+  id?: string;
+  cardId: string;
+  deckId?: string;
+  ts: number; // epoch milliseconds
+  rating: SrsRating;
+  prevInterval: number;
+  newInterval: number;
+  ms: number; // review duration in ms
+}
 
 export interface StudyStreakState {
   currentStreak: number;
@@ -24,8 +53,10 @@ export interface Flashcard {
   variables?: VariableDefinition[];
   explanation?: string;
   category?: string;
-  derivationSummary?: string;
-  
+  conditions?: string;        // e.g. "constant acceleration only"
+  derivation?: string;        // Brief derivation steps shown after reveal
+  derivationSummary?: string; // Legacy alias for derivation
+
   // Spaced Repetition Scheduling state
   repetitionStage: CardStage;
   intervalDays: number;
@@ -36,6 +67,10 @@ export interface Flashcard {
   firstTimeReviewedAt?: string;
   shiftedFromDate?: string;
   rolloverCount?: number;
+  lapses?: number;
+  suspended?: boolean;
+  consecutiveGoods?: number;
+  createdAt?: string;
   state: CardState;
 }
 
@@ -56,12 +91,15 @@ export interface ColumnMapping {
   variablesCol?: string;
   explanationCol?: string;
   categoryCol?: string;
+  conditionsCol?: string;
+  derivationCol?: string;
 }
 
 export interface Deck {
   id: string;
   name: string;
   description?: string;
+  sheetName?: string;
   googleDriveFileId?: string;
   googleDriveFileName?: string;
   googleDriveMimeType?: string;
@@ -70,6 +108,8 @@ export interface Deck {
   syncIntervalHours: number; // default: 24
   columnMapping: ColumnMapping;
   cardsCount: number;
+  newCardsPerDayOverride?: number;
+  createdAt?: string;
   sessionState?: DeckSessionState; // Active recall session state ("Resume where I left off")
   firstTimeSessionState?: DeckSessionState; // First Time Review session state ("Resume First Time Review")
 }

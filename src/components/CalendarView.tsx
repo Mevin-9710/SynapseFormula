@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { Deck, Flashcard } from '../types';
 import { getLocalDateKey, formatRepeatScheduleLabel } from '../services/srsEngine';
-import { FormulaDisplay } from './FormulaDisplay';
 
 interface CalendarViewProps {
   decks: Deck[];
@@ -53,6 +52,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const cardsByDateKey = useMemo(() => {
     const map: Record<string, Flashcard[]> = {};
     for (const card of cards) {
+      if (card.suspended) continue;
       const rawKey = getLocalDateKey(card.dueDate);
       const effectiveKey = rawKey < todayKey ? todayKey : rawKey;
       if (!map[effectiveKey]) map[effectiveKey] = [];
@@ -85,7 +85,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     setSelectedDateKey(getLocalDateKey(targetDate));
   };
 
-  // Build calendar cells for current viewMonth / viewYear
   const calendarDays = useMemo(() => {
     const firstDayOfMonth = new Date(viewYear, viewMonth, 1).getDay();
     const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
@@ -103,7 +102,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   const selectedDateCards = cardsByDateKey[selectedDateKey] || [];
 
-  // Segregate selected date's due cards deck-wise
   const selectedDateDeckGroups = useMemo(() => {
     return decks
       .map(deck => ({
@@ -112,13 +110,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       }))
       .filter(g => g.cards.length > 0);
   }, [decks, selectedDateCards]);
-
-  // Upcoming dates (after today) with scheduled repeats, segregated deck-wise
-  const upcomingDateEntries = useMemo(() => {
-    return Object.entries(cardsByDateKey)
-      .filter(([dateKey, list]) => dateKey > todayKey && list.length > 0)
-      .sort(([a], [b]) => a.localeCompare(b));
-  }, [cardsByDateKey, todayKey]);
 
   const formatReadableDateKey = (dateKey: string): string => {
     if (dateKey === todayKey) return `Today (${dateKey})`;
@@ -135,38 +126,34 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Page Header */}
-      <div className="flex items-center justify-between py-1">
+      {/* Section Header */}
+      <div className="flex items-center justify-between gap-2">
         <div>
-          <h1 className="text-lg font-bold text-black tracking-tight">
-            Calendar
-          </h1>
-          <p className="text-xs text-black/50">
-            Due cards segregated deck-wise
+          <h2 className="text-[15px] font-bold tracking-tight">Schedule Calendar</h2>
+          <p className="text-[13px] text-secondary-contrast">
+            Tap any date to inspect or practice scheduled formulas
           </p>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => handleJumpToDate(today)}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold min-h-[38px] cursor-pointer ${
-              selectedDateKey === todayKey
-                ? 'glass-button-primary text-white'
-                : 'glass-button text-black'
+            className={`min-h-[44px] px-3 rounded-xl text-[13px] font-bold cursor-pointer ${
+              selectedDateKey === todayKey ? 'glass-button-primary' : 'glass-button'
             }`}
           >
             Today
           </button>
           <button
+            type="button"
             onClick={() => {
               const t = new Date(today);
               t.setDate(t.getDate() + 1);
               handleJumpToDate(t);
             }}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold min-h-[38px] cursor-pointer ${
-              selectedDateKey === tomorrowKey
-                ? 'glass-button-primary text-white'
-                : 'glass-button text-black'
+            className={`min-h-[44px] px-3 rounded-xl text-[13px] font-bold cursor-pointer ${
+              selectedDateKey === tomorrowKey ? 'glass-button-primary' : 'glass-button'
             }`}
           >
             Tomorrow
@@ -175,22 +162,24 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       {/* Interactive Month Calendar Card */}
-      <div className="glass-card rounded-2xl p-4 border border-black/10 shadow-xs space-y-3">
+      <div className="glass-card rounded-2xl p-4 space-y-3">
         {/* Month Switcher */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <button
+            type="button"
             onClick={handlePrevMonth}
-            className="p-2 rounded-xl glass-button text-black min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
+            className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
             aria-label="Previous month"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <h2 className="text-sm font-bold text-black tracking-tight">
+          <h3 className="text-[15px] font-bold tracking-tight">
             {MONTH_NAMES[viewMonth]} {viewYear}
-          </h2>
+          </h3>
           <button
+            type="button"
             onClick={handleNextMonth}
-            className="p-2 rounded-xl glass-button text-black min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
+            className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
             aria-label="Next month"
           >
             <ChevronRight className="w-4 h-4" />
@@ -198,7 +187,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {/* Weekday Headers */}
-        <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-semibold text-black/45">
+        <div className="grid grid-cols-7 gap-1 text-center text-xs font-bold text-secondary-contrast">
           {WEEKDAYS.map(day => (
             <div key={day} className="py-1">
               {day}
@@ -206,11 +195,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           ))}
         </div>
 
-        {/* Days Grid */}
-        <div className="grid grid-cols-7 gap-1">
+        {/* Days Grid (all cells >= 44px height) */}
+        <div className="grid grid-cols-7 gap-1.5">
           {calendarDays.map((cell, idx) => {
             if (!cell.day || !cell.dateKey) {
-              return <div key={`empty_${idx}`} className="h-12" />;
+              return <div key={`empty_${idx}`} className="min-h-[46px]" />;
             }
 
             const count = cardsByDateKey[cell.dateKey]?.length || 0;
@@ -220,28 +209,23 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             return (
               <button
                 key={cell.dateKey}
+                type="button"
                 onClick={() => setSelectedDateKey(cell.dateKey!)}
-                className={`h-12 rounded-xl p-1 flex flex-col items-center justify-between border transition-all cursor-pointer tabular-nums ${
+                className={`min-h-[46px] rounded-xl p-1 flex flex-col items-center justify-between border transition-colors cursor-pointer tabular-nums ${
                   isSelected
-                    ? 'bg-black text-white border-black font-bold shadow-xs'
+                    ? 'glass-button-primary font-bold'
                     : isToday
-                    ? 'bg-black/5 text-black border-black/30 font-bold'
+                    ? 'glass-panel font-bold border-black/40 dark:border-white/40'
                     : count > 0
-                    ? 'bg-white text-black border-black/15 hover:border-black/40'
-                    : 'bg-transparent text-black/50 border-transparent hover:bg-black/5'
+                    ? 'glass-panel'
+                    : 'border-transparent text-secondary-contrast hover:bg-black/5 dark:hover:bg-white/5'
                 }`}
               >
                 <span className="text-xs leading-none mt-0.5">{cell.day}</span>
                 {count > 0 ? (
-                  <span
-                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded-md leading-tight ${
-                      isSelected ? 'bg-white text-black' : 'bg-black text-white'
-                    }`}
-                  >
-                    {count} due
-                  </span>
+                  <span className="text-xs font-bold leading-tight">{count}</span>
                 ) : (
-                  <span className="text-[9px] opacity-30">·</span>
+                  <span className="text-xs opacity-40">·</span>
                 )}
               </button>
             );
@@ -250,16 +234,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       {/* Selected Date Details (Segregated Deck-Wise) */}
-      <div className="glass-card rounded-2xl p-4 sm:p-5 border border-black/10 shadow-xs space-y-3.5">
+      <div className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <div className="flex items-center gap-1.5 text-xs font-bold text-black">
-              <CalendarIcon className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-2 text-[15px] font-bold">
+              <CalendarIcon className="w-4 h-4" />
               <span>{formatReadableDateKey(selectedDateKey)}</span>
             </div>
-            <p className="text-[11px] text-black/55 mt-0.5 tabular-nums">
-              {selectedDateCards.length} {selectedDateCards.length === 1 ? 'formula' : 'formulas'} across{' '}
-              {selectedDateDeckGroups.length} {selectedDateDeckGroups.length === 1 ? 'deck' : 'decks'}
+            <p className="text-[13px] text-secondary-contrast mt-0.5 tabular-nums">
+              {selectedDateCards.length}{' '}
+              {selectedDateCards.length === 1 ? 'formula' : 'formulas'} across{' '}
+              {selectedDateDeckGroups.length}{' '}
+              {selectedDateDeckGroups.length === 1 ? 'deck' : 'decks'}
             </p>
           </div>
         </div>
@@ -269,41 +255,38 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             {selectedDateDeckGroups.map(({ deck, cards: deckCards }) => (
               <div
                 key={deck.id}
-                className="rounded-xl bg-black/[0.025] border border-black/10 p-3 space-y-2.5"
+                className="rounded-xl glass-panel p-3.5 space-y-2.5"
               >
-                <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/5">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10 dark:border-white/10">
                   <div className="min-w-0">
-                    <h3 className="text-xs font-bold text-black truncate">
-                      {deck.name}
-                    </h3>
-                    <p className="text-[10px] text-black/50 tabular-nums">
+                    <h4 className="text-[15px] font-bold truncate">{deck.name}</h4>
+                    <p className="text-xs text-secondary-contrast tabular-nums">
                       {deckCards.length} {deckCards.length === 1 ? 'card' : 'cards'} scheduled
                     </p>
                   </div>
                   <button
-                    onClick={() =>
-                      onStartContinuousCards(deckCards, deck.name)
-                    }
-                    className="glass-button-primary px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 min-h-[34px] cursor-pointer shrink-0"
+                    type="button"
+                    onClick={() => onStartContinuousCards(deckCards, deck.name)}
+                    className="glass-button-primary min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
                   >
-                    <Play className="w-3 h-3 fill-current" />
-                    <span>Review ({deckCards.length})</span>
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>{selectedDateKey === todayKey ? 'Review' : 'Practice'}</span>
                   </button>
                 </div>
 
-                <div className="space-y-1.5">
-                  {deckCards.map((card, i) => (
+                <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                  {deckCards.slice(0, 50).map((card, i) => (
                     <div
                       key={card.id}
-                      className="p-2.5 rounded-lg bg-white/95 border border-black/5 space-y-0.5"
+                      className="p-2.5 rounded-xl bg-white/80 dark:bg-zinc-900/80 border border-black/10 dark:border-white/10 space-y-0.5"
                     >
-                      <div className="flex items-center justify-between text-[10px] text-black/45 tabular-nums">
+                      <div className="flex items-center justify-between text-xs text-secondary-contrast tabular-nums">
                         <span>
                           #{i + 1} · {card.category || 'Formula'}
                         </span>
                         <span>{formatRepeatScheduleLabel(card)}</span>
                       </div>
-                      <p className="text-xs font-semibold text-black leading-snug">
+                      <p className="text-[13px] font-semibold leading-snug">
                         {card.statement}
                       </p>
                     </div>
@@ -313,62 +296,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             ))}
           </div>
         ) : (
-          <div className="py-6 text-center space-y-1.5">
-            <CheckCircle2 className="w-7 h-7 mx-auto text-black/40" />
-            <p className="text-xs font-semibold text-black">
+          <div className="py-5 text-center space-y-1.5">
+            <CheckCircle2 className="w-6 h-6 mx-auto opacity-60" />
+            <p className="text-[13px] font-semibold">
               No formulas due on {formatReadableDateKey(selectedDateKey)}
             </p>
           </div>
         )}
       </div>
-
-      {/* Upcoming Repeat Schedule Summary (Segregated Deck-Wise) */}
-      {upcomingDateEntries.length > 0 && (
-        <div className="glass-card rounded-2xl p-4 sm:p-5 border border-black/10 shadow-xs space-y-3">
-          <div>
-            <h3 className="text-xs font-bold text-black">
-              Upcoming Repeats (Deck-Wise)
-            </h3>
-            <p className="text-[11px] text-black/50">
-              Formulas scheduled to repeat over the coming days
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {upcomingDateEntries.map(([dateKey, list]) => {
-              const deckBreakdown = decks
-                .map(d => ({
-                  deck: d,
-                  count: list.filter(c => c.deckId === d.id).length,
-                }))
-                .filter(x => x.count > 0);
-
-              return (
-                <button
-                  key={dateKey}
-                  onClick={() => {
-                    const [y, m, d] = dateKey.split('-').map(Number);
-                    handleJumpToDate(new Date(y, m - 1, d));
-                  }}
-                  className="w-full text-left p-3 rounded-xl bg-black/[0.02] hover:bg-black/[0.05] border border-black/10 flex items-center justify-between gap-2 cursor-pointer transition-colors"
-                >
-                  <div className="min-w-0 space-y-0.5">
-                    <p className="text-xs font-bold text-black">
-                      {formatReadableDateKey(dateKey)}
-                    </p>
-                    <p className="text-[11px] text-black/60 truncate">
-                      {deckBreakdown.map(b => `${b.deck.name} (${b.count})`).join(' · ')}
-                    </p>
-                  </div>
-                  <span className="text-xs font-bold text-black shrink-0 tabular-nums">
-                    {list.length} due →
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

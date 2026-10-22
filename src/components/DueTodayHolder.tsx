@@ -1,155 +1,245 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Play,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
+  FastForward,
+  Shuffle,
+  Calendar,
 } from 'lucide-react';
-import { Deck, Flashcard, DeckSessionState } from '../types';
-import { isCardDueToday, formatRepeatScheduleLabel } from '../services/srsEngine';
-import { FormulaDisplay } from './FormulaDisplay';
+import { Deck, Flashcard, DeckSessionState, UserSettings } from '../types';
+import {
+  isCardDueToday,
+  getLocalDateKey,
+  getDaysLeftBeforeExam,
+  sortDueCardsMostOverdueFirst,
+} from '../services/srsEngine';
+import { getUserSettings } from '../services/storage';
+import { BottomSheet } from './BottomSheet';
 
 interface DueTodayHolderProps {
   decks: Deck[];
   cards: Flashcard[];
   dueSessionState?: DeckSessionState;
+  settings?: UserSettings;
   onReviewDue: (options?: { deckId?: string; startCardId?: string; startFresh?: boolean }) => void;
-  showExpandedCardsByDefault?: boolean;
+  onCatchUpMode?: () => void;
+  onStartInterleaved?: (selectedDeckIds: string[]) => void;
 }
 
+/**
+ * Hero Due Today Card (5.1 & 5.3):
+ * - One hero "Review N due" (or "Continue · N due") button across all decks at the top, thumb-reachable
+ * - Catch-Up mode button when overdue backlog is high
+ * - Interleaved mode launcher in a BottomSheet
+ * - Exam countdown strip when examDate is active
+ */
 export const DueTodayHolder: React.FC<DueTodayHolderProps> = ({
   decks,
   cards,
+  dueSessionState,
+  settings: propSettings,
   onReviewDue,
-  showExpandedCardsByDefault = false,
+  onCatchUpMode,
+  onStartInterleaved,
 }) => {
-  const [expandedDeckIds, setExpandedDeckIds] = useState<Record<string, boolean>>({});
+  const settings = propSettings || getUserSettings();
+  const [showInterleavedSheet, setShowInterleavedSheet] = useState(false);
+  const [selectedInterleavedDecks, setSelectedInterleavedDecks] = useState<Record<string, boolean>>(
+    {}
+  );
 
-  const dueCards = cards.filter(c => isCardDueToday(c));
+  const activeCards = useMemo(() => cards.filter(c => !c.suspended), [cards]);
+  const dueCards = useMemo(
+    () =>
+      sortDueCardsMostOverdueFirst(
+        activeCards.filter(c => isCardDueToday(c, new Date(), settings))
+      ),
+    [activeCards, settings]
+  );
 
-  // Group due cards deck-wise
-  const deckGroups = decks
-    .map(deck => {
-      const deckDueCards = dueCards.filter(c => c.deckId === deck.id);
-      return {
-        deck,
-        dueCards: deckDueCards,
-      };
-    })
-    .filter(g => g.dueCards.length > 0);
+  const overdueCount = useMemo(() => {
+    const todayKey = getLocalDateKey(new Date());
+    return dueCards.filter(
+      c =>
+        (c.shiftedFromDate && c.shiftedFromDate < todayKey) ||
+        getLocalDateKey(c.dueDate) < todayKey
+    ).length;
+  }, [dueCards]);
 
-  const toggleDeckExpand = (deckId: string) => {
-    setExpandedDeckIds(prev => ({
-      ...prev,
-      [deckId]: !(prev[deckId] ?? showExpandedCardsByDefault),
-    }));
+  const daysLeftBeforeExam = useMemo(
+    () => getDaysLeftBeforeExam(settings.examDate),
+    [settings.examDate]
+  );
+
+  const hasActiveDueSession = Boolean(
+    dueCards.length > 0 &&
+      dueSessionState &&
+      dueSessionState.remainingQueueIds &&
+      dueSessionState.remainingQueueIds.length > 0 &&
+      dueSessionState.completedInSession > 0
+  );
+
+  const handleLaunchInterleaved = () => {
+    if (!onStartInterleaved) return;
+    const chosen = Object.keys(selectedInterleavedDecks).filter(id => selectedInterleavedDecks[id]);
+    onStartInterleaved(chosen.length > 0 ? chosen : decks.map(d => d.id));
+    setShowInterleavedSheet(false);
   };
 
-  if (dueCards.length === 0) {
-    return (
-      <div className="glass-card rounded-2xl p-4 sm:p-5 border border-black/10 shadow-xs flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-black/5 flex items-center justify-center shrink-0 text-black">
-          <CheckCircle2 className="w-5 h-5" />
-        </div>
-        <div className="min-w-0">
-          <h2 className="text-sm font-bold text-black tracking-tight">
-            Due Today · All Caught Up
-          </h2>
-          <p className="text-xs text-black/55 truncate">
-            Zero formulas due right now.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="glass-card rounded-2xl p-4 sm:p-5 border border-black/10 shadow-xs space-y-3">
-      {/* Clean Header */}
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-base font-bold text-black tracking-tight">
-          Due Today ({dueCards.length})
-        </h2>
-        <span className="text-xs text-black/50 tabular-nums">
-          {deckGroups.length} {deckGroups.length === 1 ? 'deck' : 'decks'}
-        </span>
-      </div>
+    <div className="space-y-3">
+      {/* Exam Countdown Banner (2.3) */}
+      {daysLeftBeforeExam !== null && (
+        <div className="glass-panel rounded-2xl px-4 py-3 flex items-center justify-between gap-2 text-[13px]">
+          <div className="flex items-center gap-2 font-bold">
+            <Calendar className="w-4 h-4 shrink-0" />
+            <span>
+              {daysLeftBeforeExam > 0
+                ? `${daysLeftBeforeExam} ${daysLeftBeforeExam === 1 ? 'day' : 'days'} until Exam`
+                : daysLeftBeforeExam === 0
+                ? 'Exam Day is Today'
+                : 'Exam Date Passed'}
+            </span>
+          </div>
+          <span className="text-xs text-secondary-contrast tabular-nums">
+            {daysLeftBeforeExam <= 7 && daysLeftBeforeExam > 0
+              ? 'Final-Week (≤3d cap)'
+              : `Cap: ${Math.max(1, Math.min(settings.maxIntervalDays, daysLeftBeforeExam - 1))}d`}
+          </span>
+        </div>
+      )}
 
-      {/* Deck-Wise Segregated List */}
-      <div className="space-y-2">
-        {deckGroups.map(({ deck, dueCards: deckDue }) => {
-          const isExpanded = expandedDeckIds[deck.id] ?? showExpandedCardsByDefault;
-          return (
-            <div
-              key={deck.id}
-              className="rounded-xl bg-black/[0.025] border border-black/10 p-3 space-y-2"
+      {/* Hero Review N Due Card (5.1) */}
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        {dueCards.length > 0 ? (
+          <>
+            <button
+              type="button"
+              onClick={() => onReviewDue()}
+              className="glass-button-primary w-full min-h-[54px] rounded-2xl px-4 py-3 text-[15px] font-bold flex items-center justify-between gap-3 cursor-pointer shadow-sm"
             >
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => toggleDeckExpand(deck.id)}
-                  className="text-left min-w-0 flex-1 cursor-pointer group"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-xs font-bold text-black truncate group-hover:underline">
-                      {deck.name}
-                    </p>
-                    {isExpanded ? (
-                      <ChevronUp className="w-3.5 h-3.5 text-black/40 shrink-0" />
-                    ) : (
-                      <ChevronDown className="w-3.5 h-3.5 text-black/40 shrink-0" />
-                    )}
-                  </div>
-                  <p className="text-[11px] text-black/55 tabular-nums">
-                    {deckDue.length} {deckDue.length === 1 ? 'formula' : 'formulas'} due
-                  </p>
-                </button>
+              <span className="flex items-center gap-2.5">
+                <Play className="w-4 h-4 fill-current shrink-0" />
+                <span>
+                  {hasActiveDueSession
+                    ? `Continue (${dueCards.length} due)`
+                    : `Review ${dueCards.length} due`}
+                </span>
+              </span>
+              <span className="text-[13px] opacity-85 font-normal tabular-nums">
+                {overdueCount > 0 ? `${overdueCount} overdue` : 'All decks'}
+              </span>
+            </button>
 
-                <button
-                  onClick={() => onReviewDue({ deckId: deck.id })}
-                  className="glass-button-primary px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 min-h-[36px] cursor-pointer shrink-0"
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>Review</span>
-                </button>
-              </div>
-
-              {/* Expandable Deck Due Cards */}
-              {isExpanded && (
-                <div className="space-y-1.5 pt-2 border-t border-black/5">
-                  {deckDue.map((card, i) => (
+            {/* Secondary row: Catch-Up Mode (when backlog is large) & Interleaved */}
+            {(onCatchUpMode &&
+              (dueCards.length > settings.dailyReviewCap || overdueCount >= 15)) ||
+            (onStartInterleaved && decks.length > 0) ? (
+              <div className="flex items-center gap-2 flex-wrap">
+                {onCatchUpMode &&
+                  (dueCards.length > settings.dailyReviewCap || overdueCount >= 15) && (
                     <button
-                      key={card.id}
                       type="button"
-                      onClick={() =>
-                        onReviewDue({
-                          deckId: deck.id,
-                          startCardId: card.id,
-                        })
-                      }
-                      className="w-full text-left p-2.5 rounded-lg bg-white/90 hover:bg-white border border-black/5 flex items-center justify-between gap-2 text-xs cursor-pointer transition-colors"
+                      onClick={onCatchUpMode}
+                      className="glass-button flex-1 min-h-[44px] px-3 py-2 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                      title="Keep most-overdue cards today and spread excess across the next 3 days"
                     >
-                      <div className="min-w-0 flex-1 space-y-0.5">
-                        <div className="flex items-center gap-1.5 text-[10px] text-black/45 tabular-nums">
-                          <span>#{i + 1}</span>
-                          <span>·</span>
-                          <span>{formatRepeatScheduleLabel(card)}</span>
-                        </div>
-                        <p className="text-xs font-semibold text-black truncate">
-                          {card.statement}
-                        </p>
-                        <div className="text-xs text-black/80 truncate">
-                          <FormulaDisplay formula={card.formula} displayMode={false} size="xs" />
-                        </div>
-                      </div>
+                      <FastForward className="w-4 h-4 shrink-0" />
+                      <span>Catch-Up Mode</span>
                     </button>
-                  ))}
-                </div>
-              )}
+                  )}
+
+                {onStartInterleaved && decks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowInterleavedSheet(true)}
+                    className="glass-button flex-1 min-h-[44px] px-3 py-2 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Shuffle className="w-4 h-4 shrink-0" />
+                    <span>Interleaved</span>
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-black/5 dark:bg-white/10 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-[15px] font-bold tracking-tight">All Caught Up</h2>
+                <p className="text-[13px] text-secondary-contrast truncate">
+                  0 due right now across your decks
+                </p>
+              </div>
             </div>
-          );
-        })}
+
+            {onStartInterleaved && decks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowInterleavedSheet(true)}
+                className="glass-button min-h-[44px] px-3.5 py-2 rounded-xl text-[13px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+              >
+                <Shuffle className="w-4 h-4" />
+                <span>Interleaved</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Interleaved Deck Selector Bottom Sheet (5.6 & 2.7) */}
+      <BottomSheet
+        isOpen={showInterleavedSheet}
+        onClose={() => setShowInterleavedSheet(false)}
+        title="Interleaved Recall"
+        subtitle="Shuffled 'Which formula applies?' practice across selected decks"
+        footer={
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowInterleavedSheet(false)}
+              className="glass-button flex-1 min-h-[44px] rounded-xl text-[13px] font-semibold cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleLaunchInterleaved}
+              className="glass-button-primary flex-1 min-h-[44px] rounded-xl text-[13px] font-bold cursor-pointer"
+            >
+              Start Interleaved
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-2">
+          {decks.map(d => {
+            const checked = selectedInterleavedDecks[d.id] ?? true;
+            return (
+              <label
+                key={d.id}
+                className="flex items-center justify-between p-3 rounded-xl glass-panel min-h-[48px] text-[15px] cursor-pointer gap-3"
+              >
+                <span className="font-semibold truncate">{d.name}</span>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={e =>
+                    setSelectedInterleavedDecks(prev => ({
+                      ...prev,
+                      [d.id]: e.target.checked,
+                    }))
+                  }
+                  className="w-5 h-5 rounded"
+                />
+              </label>
+            );
+          })}
+        </div>
+      </BottomSheet>
     </div>
   );
 };

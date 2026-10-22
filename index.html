@@ -2,12 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>SynapseFormula - Physics & Math Spaced Repetition</title>
     <meta name="description" content="Scientific spaced repetition flashcard system for physics and mathematical formulas synced directly with Google Drive Excel files." />
     <meta property="og:title" content="SynapseFormula - Physics & Math Spaced Repetition" />
     <meta property="og:description" content="Scientific spaced repetition flashcard system for physics and mathematical formulas synced directly with Google Drive Excel files." />
-    <meta name="theme-color" content="#f6f7f8" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f4f6" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1014" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -17,9 +18,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   </head>
-  <body class="bg-[#f6f7f8] text-[#111111] antialiased selection:bg-black selection:text-white">
+  <body class="mobile-canvas-bg antialiased selection:bg-black selection:text-white">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

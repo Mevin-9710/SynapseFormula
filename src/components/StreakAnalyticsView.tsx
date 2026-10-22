@@ -1,65 +1,94 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import {
   Flame,
-  Trophy,
-  CheckCircle2,
-  TrendingUp,
   BarChart3,
-  Zap,
-  Award,
+  Clock,
   Play,
   Calendar,
 } from 'lucide-react';
-import { Deck, Flashcard, StudyStreakState } from '../types';
-import { getLocalDateKey, isCardDueToday } from '../services/srsEngine';
+import { Deck, Flashcard, StudyStreakState, UserSettings, ReviewLogEntry } from '../types';
+import { getLocalDateKey, isCardDueToday, isCardStable, isCardLeech } from '../services/srsEngine';
+import { getUserSettings } from '../services/storage';
+import {
+  getReviewLogsSync,
+  initReviewLogStore,
+  computeReviewAnalytics,
+} from '../services/reviewLog';
+import { CalendarView } from './CalendarView';
 
 interface StreakAnalyticsViewProps {
   decks: Deck[];
   cards: Flashcard[];
   streak: StudyStreakState;
+  settings?: UserSettings;
   onReviewDue: () => void;
+  onStartContinuousCards?: (cardsToStudy: Flashcard[], sessionTitle: string) => void;
 }
 
+/**
+ * Unified Progress Tab (5.4 & 5.5):
+ * Combines Streak, 7-Day Workload Forecast, 28-Day Heatmap, Stability/Mastery,
+ * Review Log Analytics (Retention %, Cards/Day, Time/Day), and Schedule Calendar.
+ */
 export const StreakAnalyticsView: React.FC<StreakAnalyticsViewProps> = ({
   decks,
   cards,
   streak,
+  settings: propSettings,
   onReviewDue,
+  onStartContinuousCards,
 }) => {
+  const settings = propSettings || getUserSettings();
+  const [logs, setLogs] = useState<ReviewLogEntry[]>(() => getReviewLogsSync());
+
+  useEffect(() => {
+    initReviewLogStore().then(loaded => setLogs([...loaded]));
+  }, [cards]);
+
   const todayKey = useMemo(() => getLocalDateKey(new Date()), []);
   const completedToday = streak.completedDates.includes(todayKey);
 
+  const activeCards = useMemo(() => cards.filter(c => !c.suspended), [cards]);
   const dueCardsToday = useMemo(
-    () => cards.filter(c => isCardDueToday(c)),
-    [cards]
+    () => activeCards.filter(c => isCardDueToday(c, new Date(), settings)),
+    [activeCards, settings]
   );
 
-  // Last 7 days strip
-  const last7Days = useMemo(() => {
-    const days: Array<{
-      label: string;
-      dateNum: number;
-      dateKey: string;
-      done: boolean;
-      isToday: boolean;
-    }> = [];
+  // 7-Day Workload Forecast Strip (2.10 & 5.5)
+  const forecastStrip = useMemo(() => {
     const now = new Date();
-    const shortLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const key = getLocalDateKey(d);
-      days.push({
-        label: shortLabels[d.getDay()],
-        dateNum: d.getDate(),
-        dateKey: key,
-        done: streak.completedDates.includes(key),
-        isToday: i === 0,
-      });
-    }
-    return days;
-  }, [streak.completedDates]);
+    const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const totalUnseen = activeCards.filter(
+      c => !c.firstTimeReviewedAt && c.repetitionCount === 0
+    ).length;
 
-  // Last 28 days (4 weeks) consistency grid
+    let remainingUnseenPool = totalUnseen;
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+      const key = getLocalDateKey(d);
+      const scheduledReviews = activeCards.filter(c => {
+        if (c.repetitionCount === 0 && !c.firstTimeReviewedAt) return false;
+        const cardKey = getLocalDateKey(c.dueDate);
+        return i === 0 ? cardKey <= todayKey : cardKey === key;
+      }).length;
+
+      const plannedNew = Math.min(remainingUnseenPool, settings.newCardsPerDay);
+      remainingUnseenPool = Math.max(0, remainingUnseenPool - plannedNew);
+
+      return {
+        dateKey: key,
+        dayLabel: i === 0 ? 'Today' : shortDays[d.getDay()],
+        reviewCount: scheduledReviews,
+        newCount: plannedNew,
+      };
+    });
+  }, [activeCards, settings.newCardsPerDay, todayKey]);
+
+  // Review Log Analytics (2.5: retention %, cards/day and time/day charts)
+  const logStats = useMemo(() => computeReviewAnalytics(logs, 7), [logs]);
+
+  // Last 28 days (4 weeks) consistency heatmap (3.5)
   const last28Days = useMemo(() => {
     const days: Array<{
       dateKey: string;
@@ -81,337 +110,184 @@ export const StreakAnalyticsView: React.FC<StreakAnalyticsViewProps> = ({
     return days;
   }, [streak.completedDates]);
 
-  // Overall Card Mastery & Performance Stats
+  // Overall Card Stability & State Distribution (3.1: show "stable" instead of mastered)
   const stats = useMemo(() => {
-    const total = cards.length;
-    const mastered = cards.filter(c => c.state === 'mastered').length;
-    const review = cards.filter(c => c.state === 'review').length;
-    const learning = cards.filter(c => c.state === 'learning').length;
-    const unseen = cards.filter(c => c.state === 'new').length;
-
-    const reviewedTodayCount = cards.filter(
-      c =>
-        (c.lastReviewedAt && getLocalDateKey(c.lastReviewedAt) === todayKey) ||
-        (c.firstTimeReviewedAt && getLocalDateKey(c.firstTimeReviewedAt) === todayKey)
-    ).length;
-
-    const totalRepetitions = cards.reduce((sum, c) => sum + (c.repetitionCount || 0), 0);
-
-    const seenCards = cards.filter(c => c.state !== 'new');
-    const avgEase =
-      seenCards.length > 0
-        ? seenCards.reduce((sum, c) => sum + (c.easeFactor || 2.5), 0) / seenCards.length
-        : 2.5;
-
-    const masteryRate =
-      total > 0 ? Math.round(((mastered + review) / total) * 100) : 0;
+    const total = activeCards.length;
+    const stable = activeCards.filter(c => isCardStable(c, settings)).length;
+    const review = activeCards.filter(c => c.state === 'review' && !isCardStable(c, settings)).length;
+    const learning = activeCards.filter(c => c.state === 'learning').length;
+    const unseen = activeCards.filter(c => c.state === 'new').length;
+    const leeches = activeCards.filter(c => isCardLeech(c)).length;
+    const suspended = cards.filter(c => c.suspended).length;
 
     return {
       total,
-      mastered,
+      stable,
       review,
       learning,
       unseen,
-      reviewedTodayCount,
-      totalRepetitions,
-      avgEase,
-      masteryRate,
+      leeches,
+      suspended,
     };
-  }, [cards, todayKey]);
+  }, [activeCards, cards, settings]);
 
-  // Deck-wise performance breakdown
-  const deckPerformance = useMemo(() => {
-    return decks.map(deck => {
-      const deckCards = cards.filter(c => c.deckId === deck.id);
-      const total = deckCards.length;
-      const mastered = deckCards.filter(c => c.state === 'mastered').length;
-      const review = deckCards.filter(c => c.state === 'review').length;
-      const learning = deckCards.filter(c => c.state === 'learning').length;
-      const unseen = deckCards.filter(c => c.state === 'new').length;
-      const due = deckCards.filter(c => isCardDueToday(c)).length;
+  const maxDailyCards = useMemo(
+    () => Math.max(10, ...logStats.dailyMetrics.map(d => d.cardsCount)),
+    [logStats.dailyMetrics]
+  );
 
-      const avgEase =
-        total > 0
-          ? deckCards.reduce((sum, c) => sum + (c.easeFactor || 2.5), 0) / total
-          : 2.5;
-
-      const progressPct =
-        total > 0
-          ? Math.round(((mastered * 1 + review * 0.75 + learning * 0.35) / total) * 100)
-          : 0;
-
-      return {
-        deck,
-        total,
-        mastered,
-        review,
-        learning,
-        unseen,
-        due,
-        avgEase,
-        progressPct,
-      };
-    });
-  }, [decks, cards]);
+  const maxDailyMinutes = useMemo(
+    () => Math.max(5, ...logStats.dailyMetrics.map(d => d.totalMinutes)),
+    [logStats.dailyMetrics]
+  );
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-black tracking-tight flex items-center gap-2">
-            <Flame className="w-5 h-5 text-orange-500 fill-amber-400" />
-            <span>Streaks & Analytics</span>
-          </h1>
-          <p className="text-xs text-black/55">
-            Daily review consistency & formula recall performance
+          <h1 className="text-lg font-bold tracking-tight">Progress & Schedule</h1>
+          <p className="text-[13px] text-secondary-contrast">
+            Streak, 7-day forecast, stability, retention & calendar
           </p>
         </div>
       </div>
 
-      {/* Hero Study Streak Card */}
-      <div className="glass-card rounded-2xl p-4 sm:p-5 border border-amber-300/70 bg-gradient-to-br from-amber-50/90 via-orange-50/60 to-white space-y-4">
+      {/* Compact Streak + Retention Summary Card */}
+      <div className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div
-              className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs border ${
-                completedToday
-                  ? 'bg-gradient-to-br from-orange-500 to-amber-500 text-white border-orange-400'
-                  : 'bg-amber-100/90 text-orange-600 border-amber-300'
-              }`}
-            >
-              <Flame
-                className={`w-6 h-6 ${
-                  completedToday ? 'text-white fill-amber-200' : 'text-orange-500 fill-amber-400'
-                }`}
-              />
+            <div className="w-11 h-11 rounded-2xl bg-black/5 dark:bg-white/10 flex items-center justify-center shrink-0">
+              <Flame className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl font-extrabold text-black tabular-nums tracking-tight">
-                  {streak.currentStreak}
+              <div className="flex items-baseline gap-2">
+                <span className="text-xl font-extrabold tabular-nums">
+                  {streak.currentStreak}d Streak
                 </span>
-                <span className="text-xs font-bold uppercase tracking-wider text-orange-600">
-                  {streak.currentStreak === 1 ? 'Day Streak' : 'Days Streak'}
+                <span className="text-[13px] text-secondary-contrast tabular-nums">
+                  · Best {streak.bestStreak}d
                 </span>
               </div>
-              <p className="text-xs text-black/65 mt-0.5 leading-snug">
+              <p className="text-[13px] text-secondary-contrast truncate">
                 {completedToday
-                  ? 'All due reviews completed for today!'
+                  ? 'All due reviews completed for today'
                   : dueCardsToday.length > 0
-                  ? `${dueCardsToday.length} due ${
-                      dueCardsToday.length === 1 ? 'card' : 'cards'
-                    } left to lock in today’s streak`
-                  : 'Review any formula today to build your streak'}
+                  ? `${dueCardsToday.length} due left today`
+                  : 'Caught up for today'}
               </p>
             </div>
           </div>
 
           {!completedToday && dueCardsToday.length > 0 && (
             <button
+              type="button"
               onClick={onReviewDue}
-              className="px-3 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs transition-colors min-h-[40px]"
+              className="glass-button-primary min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Finish ({dueCardsToday.length})</span>
+              <span>Review ({dueCardsToday.length})</span>
             </button>
           )}
         </div>
 
-        {/* Streak Mini KPI Row */}
+        {/* Retention %, Total Logged Reviews, Avg Pace */}
         <div className="grid grid-cols-3 gap-2 pt-1">
-          <div className="rounded-xl bg-white/85 border border-amber-200/70 p-2.5 flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-amber-500 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-black/50 uppercase">Best Streak</div>
-              <div className="text-sm font-bold text-black tabular-nums">
-                {streak.bestStreak} {streak.bestStreak === 1 ? 'day' : 'days'}
-              </div>
+          <div className="rounded-xl glass-panel p-2.5">
+            <div className="text-xs font-bold text-secondary-contrast uppercase">Retention</div>
+            <div className="text-base font-extrabold tabular-nums">
+              {logStats.overallRetentionPct}%
             </div>
           </div>
-
-          <div className="rounded-xl bg-white/85 border border-emerald-200/70 p-2.5 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-black/50 uppercase">Total Days</div>
-              <div className="text-sm font-bold text-black tabular-nums">
-                {streak.completedDates.length}
-              </div>
+          <div className="rounded-xl glass-panel p-2.5">
+            <div className="text-xs font-bold text-secondary-contrast uppercase">Reviews</div>
+            <div className="text-base font-extrabold tabular-nums">
+              {logStats.totalReviews}
             </div>
           </div>
-
-          <div className="rounded-xl bg-white/85 border border-sky-200/70 p-2.5 flex items-center gap-2">
-            <Zap className="w-4 h-4 text-sky-500 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-black/50 uppercase">Done Today</div>
-              <div className="text-sm font-bold text-black tabular-nums">
-                {stats.reviewedTodayCount} cards
-              </div>
+          <div className="rounded-xl glass-panel p-2.5">
+            <div className="text-xs font-bold text-secondary-contrast uppercase">Pace</div>
+            <div className="text-base font-extrabold tabular-nums">
+              {logStats.avgSecondsPerCard}s/card
             </div>
-          </div>
-        </div>
-
-        {/* Last 7 Days Visual Tracker */}
-        <div className="rounded-xl bg-white/90 border border-black/5 p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-black/70 uppercase tracking-wider">
-              Last 7 Days
-            </span>
-            <span className="text-[11px] font-semibold text-emerald-600 tabular-nums">
-              {last7Days.filter(d => d.done).length}/7 days completed
-            </span>
-          </div>
-          <div className="grid grid-cols-7 gap-1.5 text-center">
-            {last7Days.map(day => (
-              <div
-                key={day.dateKey}
-                className={`rounded-xl py-2 px-1 flex flex-col items-center gap-1 border ${
-                  day.done
-                    ? 'bg-emerald-50/90 border-emerald-200 text-emerald-800'
-                    : day.isToday
-                    ? 'bg-amber-50/90 border-amber-300 text-amber-800'
-                    : 'bg-black/[0.02] border-black/5 text-black/40'
-                }`}
-              >
-                <span className="text-[9px] font-bold uppercase tracking-tight">
-                  {day.label}
-                </span>
-                <div
-                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold tabular-nums ${
-                    day.done
-                      ? 'bg-emerald-500 text-white shadow-2xs'
-                      : day.isToday
-                      ? 'bg-amber-400/25 text-amber-800 border border-amber-400'
-                      : 'bg-black/5 text-black/40'
-                  }`}
-                >
-                  {day.done ? '✓' : day.dateNum}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       </div>
 
-      {/* Performance Analytics Overview */}
-      <div className="glass-card rounded-2xl p-4 sm:p-5 space-y-4">
+      {/* 7-Day Workload Forecast Strip (2.10 & 5.5) */}
+      <div className="glass-card rounded-2xl p-4 space-y-2.5">
+        <div className="flex items-center justify-between text-[13px]">
+          <span className="font-bold">7-Day Workload Forecast</span>
+          <span className="text-xs text-secondary-contrast tabular-nums">
+            Review · +New ({settings.newCardsPerDay}/d quota)
+          </span>
+        </div>
+        <div className="grid grid-cols-7 gap-1.5 text-center">
+          {forecastStrip.map((day, idx) => (
+            <div
+              key={day.dateKey}
+              className={`rounded-xl py-2 px-1 border flex flex-col items-center justify-between ${
+                idx === 0
+                  ? 'glass-button-primary'
+                  : 'glass-panel'
+              }`}
+            >
+              <span className="text-xs font-bold">{day.dayLabel}</span>
+              <span className="text-[15px] font-extrabold tabular-nums mt-0.5">
+                {day.reviewCount}
+              </span>
+              <span className="text-xs opacity-80 tabular-nums">
+                +{day.newCount}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Formula Stability Breakdown (3.1: Stable instead of Mastered) */}
+      <div className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-indigo-600" />
-            <h2 className="text-sm font-bold text-black">Recall Performance & Mastery</h2>
-          </div>
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg tabular-nums">
-            {stats.masteryRate}% Mature
+          <h2 className="text-[15px] font-bold">Formula Stability</h2>
+          <span className="text-xs text-secondary-contrast tabular-nums">
+            {stats.leeches} leeches · {stats.suspended} suspended
           </span>
         </div>
 
-        {/* 4 Metric Tiles */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-          <div className="rounded-xl p-3 bg-emerald-50/70 border border-emerald-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-              Mastered
-            </span>
-            <div className="text-xl font-extrabold text-emerald-900 tabular-nums mt-0.5">
-              {stats.mastered}
-            </div>
-            <span className="text-[10px] text-emerald-700/80">21+ days interval</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="rounded-xl p-3 glass-panel">
+            <span className="text-xs font-bold uppercase text-secondary-contrast">Stable</span>
+            <div className="text-lg font-extrabold tabular-nums">{stats.stable}</div>
+            <span className="text-xs text-secondary-contrast">3× Good at cap</span>
           </div>
 
-          <div className="rounded-xl p-3 bg-indigo-50/70 border border-indigo-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
-              In Review
-            </span>
-            <div className="text-xl font-extrabold text-indigo-900 tabular-nums mt-0.5">
-              {stats.review}
-            </div>
-            <span className="text-[10px] text-indigo-700/80">Active recall cycle</span>
+          <div className="rounded-xl p-3 glass-panel">
+            <span className="text-xs font-bold uppercase text-secondary-contrast">Review</span>
+            <div className="text-lg font-extrabold tabular-nums">{stats.review}</div>
+            <span className="text-xs text-secondary-contrast">Active cycle</span>
           </div>
 
-          <div className="rounded-xl p-3 bg-amber-50/70 border border-amber-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
-              Learning
-            </span>
-            <div className="text-xl font-extrabold text-amber-900 tabular-nums mt-0.5">
-              {stats.learning}
-            </div>
-            <span className="text-[10px] text-amber-700/80">Short-term steps</span>
+          <div className="rounded-xl p-3 glass-panel">
+            <span className="text-xs font-bold uppercase text-secondary-contrast">Learning</span>
+            <div className="text-lg font-extrabold tabular-nums">{stats.learning}</div>
+            <span className="text-xs text-secondary-contrast">Short steps</span>
           </div>
 
-          <div className="rounded-xl p-3 bg-sky-50/70 border border-sky-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700">
-              Unseen
-            </span>
-            <div className="text-xl font-extrabold text-sky-900 tabular-nums mt-0.5">
-              {stats.unseen}
-            </div>
-            <span className="text-[10px] text-sky-700/80">First-time queue</span>
+          <div className="rounded-xl p-3 glass-panel">
+            <span className="text-xs font-bold uppercase text-secondary-contrast">Unseen</span>
+            <div className="text-lg font-extrabold tabular-nums">{stats.unseen}</div>
+            <span className="text-xs text-secondary-contrast">New queue</span>
           </div>
         </div>
-
-        {/* Stacked Distribution Bar */}
-        {stats.total > 0 && (
-          <div className="space-y-1.5">
-            <div className="w-full h-3 rounded-full bg-black/5 overflow-hidden flex">
-              {stats.mastered > 0 && (
-                <div
-                  style={{ width: `${(stats.mastered / stats.total) * 100}%` }}
-                  className="bg-emerald-500 h-full transition-all"
-                  title={`Mastered: ${stats.mastered}`}
-                />
-              )}
-              {stats.review > 0 && (
-                <div
-                  style={{ width: `${(stats.review / stats.total) * 100}%` }}
-                  className="bg-indigo-500 h-full transition-all"
-                  title={`Review: ${stats.review}`}
-                />
-              )}
-              {stats.learning > 0 && (
-                <div
-                  style={{ width: `${(stats.learning / stats.total) * 100}%` }}
-                  className="bg-amber-400 h-full transition-all"
-                  title={`Learning: ${stats.learning}`}
-                />
-              )}
-              {stats.unseen > 0 && (
-                <div
-                  style={{ width: `${(stats.unseen / stats.total) * 100}%` }}
-                  className="bg-sky-300 h-full transition-all"
-                  title={`Unseen: ${stats.unseen}`}
-                />
-              )}
-            </div>
-            <div className="flex flex-wrap items-center justify-between text-[10px] text-black/55 gap-2">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" /> Mastered
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500" /> Review
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-amber-400" /> Learning
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-sky-300" /> Unseen
-                </span>
-              </div>
-              <span className="tabular-nums font-semibold">
-                Avg Ease: {stats.avgEase.toFixed(2)}x · {stats.totalRepetitions} total reps
-              </span>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* 28-Day Activity Heatmap */}
-      <div className="glass-card rounded-2xl p-4 sm:p-5 space-y-3">
+      {/* 28-Day Consistency Heatmap */}
+      <div className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-emerald-600" />
-            <h2 className="text-sm font-bold text-black">28-Day Consistency Heatmap</h2>
+            <Calendar className="w-4 h-4" />
+            <h2 className="text-[15px] font-bold">28-Day Heatmap</h2>
           </div>
-          <span className="text-[11px] font-semibold text-black/55 tabular-nums">
+          <span className="text-xs font-semibold text-secondary-contrast tabular-nums">
             {last28Days.filter(d => d.done).length} active days
           </span>
         </div>
@@ -421,12 +297,12 @@ export const StreakAnalyticsView: React.FC<StreakAnalyticsViewProps> = ({
             <div
               key={day.dateKey}
               title={`${day.dateKey}: ${day.done ? 'Completed due reviews' : 'No streak recorded'}`}
-              className={`h-8 rounded-lg flex items-center justify-center text-[11px] font-semibold tabular-nums border transition-colors ${
+              className={`min-h-[38px] rounded-xl flex items-center justify-center text-xs font-bold tabular-nums border ${
                 day.done
-                  ? 'bg-emerald-500 text-white border-emerald-600 shadow-2xs'
+                  ? 'glass-button-primary'
                   : day.isToday
-                  ? 'bg-amber-50 text-amber-800 border-amber-300 font-bold'
-                  : 'bg-black/[0.03] text-black/40 border-black/5'
+                  ? 'glass-panel border-black/40 dark:border-white/40'
+                  : 'glass-panel text-secondary-contrast'
               }`}
             >
               {day.dayNum}
@@ -435,72 +311,86 @@ export const StreakAnalyticsView: React.FC<StreakAnalyticsViewProps> = ({
         </div>
       </div>
 
-      {/* Deck-by-Deck Performance Breakdown */}
-      <div className="glass-card rounded-2xl p-4 sm:p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Award className="w-4 h-4 text-amber-600" />
-            <h2 className="text-sm font-bold text-black">Deck Mastery Breakdown</h2>
+      {/* Review Log Charts: Cards / Day & Time / Day (2.5) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="glass-card rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] font-bold flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4" />
+              <span>Cards / Day (7d)</span>
+            </span>
+            <span className="text-xs text-secondary-contrast tabular-nums">
+              {logStats.dailyMetrics[logStats.dailyMetrics.length - 1]?.cardsCount || 0} today
+            </span>
           </div>
-          <span className="text-[11px] text-black/50 tabular-nums">{decks.length} decks</span>
+          <div className="grid grid-cols-7 gap-1.5 items-end h-28 pt-2">
+            {logStats.dailyMetrics.map(day => {
+              const heightPct = Math.max(8, Math.round((day.cardsCount / maxDailyCards) * 100));
+              return (
+                <div key={day.dateKey} className="flex flex-col items-center gap-1 h-full justify-end">
+                  <span className="text-xs font-bold text-secondary-contrast tabular-nums">
+                    {day.cardsCount}
+                  </span>
+                  <div className="w-full bg-black/10 dark:bg-white/10 rounded-t-md h-16 flex items-end overflow-hidden">
+                    <div
+                      style={{ height: `${heightPct}%` }}
+                      className="w-full bg-black dark:bg-white rounded-t-md"
+                    />
+                  </div>
+                  <span className="text-xs text-secondary-contrast truncate w-full text-center">
+                    {day.label.split(' ')[1] || day.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="space-y-2.5">
-          {deckPerformance.map(item => (
-            <div
-              key={item.deck.id}
-              className="rounded-xl bg-white/75 border border-black/8 p-3 space-y-2"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h3 className="text-xs font-bold text-black truncate">{item.deck.name}</h3>
-                  <p className="text-[10px] text-black/50 tabular-nums">
-                    {item.total} cards · Ease {item.avgEase.toFixed(2)}x
-                    {item.due > 0 ? ` · ${item.due} due today` : ' · All caught up'}
-                  </p>
+        <div className="glass-card rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] font-bold flex items-center gap-1.5">
+              <Clock className="w-4 h-4" />
+              <span>Time / Day (Mins)</span>
+            </span>
+            <span className="text-xs text-secondary-contrast tabular-nums">
+              {logStats.dailyMetrics[logStats.dailyMetrics.length - 1]?.totalMinutes || 0}m today
+            </span>
+          </div>
+          <div className="grid grid-cols-7 gap-1.5 items-end h-28 pt-2">
+            {logStats.dailyMetrics.map(day => {
+              const heightPct = Math.max(
+                8,
+                Math.round((day.totalMinutes / maxDailyMinutes) * 100)
+              );
+              return (
+                <div key={day.dateKey} className="flex flex-col items-center gap-1 h-full justify-end">
+                  <span className="text-xs font-bold text-secondary-contrast tabular-nums">
+                    {day.totalMinutes}m
+                  </span>
+                  <div className="w-full bg-black/10 dark:bg-white/10 rounded-t-md h-16 flex items-end overflow-hidden">
+                    <div
+                      style={{ height: `${heightPct}%` }}
+                      className="w-full bg-black dark:bg-white rounded-t-md"
+                    />
+                  </div>
+                  <span className="text-xs text-secondary-contrast truncate w-full text-center">
+                    {day.label.split(' ')[1] || day.label}
+                  </span>
                 </div>
-                <span
-                  className={`text-xs font-bold px-2 py-0.5 rounded-lg tabular-nums shrink-0 ${
-                    item.progressPct >= 75
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      : item.progressPct >= 40
-                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200'
-                  }`}
-                >
-                  {item.progressPct}%
-                </span>
-              </div>
-
-              <div className="w-full h-2 rounded-full bg-black/5 overflow-hidden flex">
-                {item.total > 0 && (
-                  <>
-                    <div
-                      style={{ width: `${(item.mastered / item.total) * 100}%` }}
-                      className="bg-emerald-500 h-full"
-                    />
-                    <div
-                      style={{ width: `${(item.review / item.total) * 100}%` }}
-                      className="bg-indigo-500 h-full"
-                    />
-                    <div
-                      style={{ width: `${(item.learning / item.total) * 100}%` }}
-                      className="bg-amber-400 h-full"
-                    />
-                  </>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between text-[10px] text-black/55 tabular-nums">
-                <span className="text-emerald-700 font-medium">{item.mastered} mastered</span>
-                <span className="text-indigo-700 font-medium">{item.review} review</span>
-                <span className="text-amber-700 font-medium">{item.learning} learning</span>
-                <span className="text-sky-700 font-medium">{item.unseen} unseen</span>
-              </div>
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      {/* Interactive Schedule Calendar (5.5) */}
+      {onStartContinuousCards && (
+        <CalendarView
+          decks={decks}
+          cards={cards}
+          onStartContinuousCards={onStartContinuousCards}
+        />
+      )}
     </div>
   );
 };

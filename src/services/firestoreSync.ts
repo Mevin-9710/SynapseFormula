@@ -12,7 +12,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db, auth } from './auth';
-import { Deck, Flashcard, StudyStreakState, VariableDefinition } from '../types';
+import { Deck, Flashcard, StudyStreakState, VariableDefinition, ColumnMapping } from '../types';
 
 export enum OperationType {
   CREATE = 'create',
@@ -79,6 +79,8 @@ export async function testFirestoreConnection(): Promise<void> {
 
 testFirestoreConnection();
 
+const BATCH_CHUNK_SIZE = 450;
+
 const sanitizeId = (rawId: string): string => {
   const cleaned = String(rawId || 'id')
     .replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -91,7 +93,12 @@ const truncateStr = (val: string | undefined, maxLen: number, fallback = ''): st
   return str.slice(0, maxLen);
 };
 
-function serializeDeckForFirestore(deck: Deck, uid: string, existingCreatedAt?: any) {
+export function serializeDeckForFirestore(deck: Deck, uid: string) {
+  const mapping = deck.columnMapping || {
+    statementCol: 'Statement',
+    formulaCol: 'Formula',
+  };
+
   const record: Record<string, any> = {
     ownerId: uid,
     name: truncateStr(deck.name, 200, 'Untitled Deck'),
@@ -99,9 +106,33 @@ function serializeDeckForFirestore(deck: Deck, uid: string, existingCreatedAt?: 
     cardsCount: Math.max(0, Math.min(10000, Math.floor(deck.cardsCount || 0))),
     syncIntervalHours: Math.max(1, Math.min(720, Math.floor(deck.syncIntervalHours || 24))),
     lastSyncedAt: truncateStr(deck.lastSyncedAt || new Date().toISOString(), 64),
-    createdAt: existingCreatedAt || serverTimestamp(),
+    statementCol: truncateStr(mapping.statementCol, 120, 'Statement'),
+    formulaCol: truncateStr(mapping.formulaCol, 120, 'Formula'),
+    createdAt: truncateStr(deck.createdAt || deck.lastSyncedAt || new Date().toISOString(), 64),
     updatedAt: serverTimestamp(),
   };
+
+  if (deck.sheetName) {
+    record.sheetName = truncateStr(deck.sheetName, 120);
+  }
+  if (typeof deck.newCardsPerDayOverride === 'number') {
+    record.newCardsPerDayOverride = Math.max(0, Math.min(1000, Math.floor(deck.newCardsPerDayOverride)));
+  }
+  if (mapping.variablesCol) {
+    record.variablesCol = truncateStr(mapping.variablesCol, 120);
+  }
+  if (mapping.explanationCol) {
+    record.explanationCol = truncateStr(mapping.explanationCol, 120);
+  }
+  if (mapping.categoryCol) {
+    record.categoryCol = truncateStr(mapping.categoryCol, 120);
+  }
+  if (mapping.conditionsCol) {
+    record.conditionsCol = truncateStr(mapping.conditionsCol, 120);
+  }
+  if (mapping.derivationCol) {
+    record.derivationCol = truncateStr(mapping.derivationCol, 120);
+  }
 
   if (deck.googleDriveFileId) {
     record.googleDriveFileId = truncateStr(deck.googleDriveFileId, 256);
@@ -119,7 +150,12 @@ function serializeDeckForFirestore(deck: Deck, uid: string, existingCreatedAt?: 
   return record;
 }
 
-function serializeCardForFirestore(card: Flashcard, uid: string, existingCreatedAt?: any) {
+export function serializeCardForFirestore(card: Flashcard, uid: string) {
+  const normalizedState =
+    card.state === 'new' || card.state === 'learning' || card.state === 'review'
+      ? card.state
+      : 'review';
+
   const record: Record<string, any> = {
     ownerId: uid,
     deckId: sanitizeId(card.deckId),
@@ -132,8 +168,8 @@ function serializeCardForFirestore(card: Flashcard, uid: string, existingCreated
     easeFactor: Math.max(1.0, Math.min(10.0, Number(card.easeFactor) || 2.5)),
     repetitionCount: Math.max(0, Math.min(100000, Math.floor(card.repetitionCount || 0))),
     dueDate: truncateStr(card.dueDate || new Date().toISOString(), 64),
-    state: ['new', 'learning', 'review', 'mastered'].includes(card.state) ? card.state : 'new',
-    createdAt: existingCreatedAt || serverTimestamp(),
+    state: normalizedState,
+    createdAt: truncateStr(card.createdAt || card.dueDate || new Date().toISOString(), 64),
     updatedAt: serverTimestamp(),
   };
 
@@ -142,6 +178,13 @@ function serializeCardForFirestore(card: Flashcard, uid: string, existingCreated
   }
   if (card.category !== undefined) {
     record.category = truncateStr(card.category, 200);
+  }
+  if (card.conditions !== undefined) {
+    record.conditions = truncateStr(card.conditions, 1000);
+  }
+  const deriv = card.derivation ?? card.derivationSummary;
+  if (deriv !== undefined) {
+    record.derivation = truncateStr(deriv, 2000);
   }
   if (card.lastReviewedAt) {
     record.lastReviewedAt = truncateStr(card.lastReviewedAt, 64);
@@ -155,6 +198,15 @@ function serializeCardForFirestore(card: Flashcard, uid: string, existingCreated
   if (typeof card.rolloverCount === 'number') {
     record.rolloverCount = Math.max(0, Math.min(10000, Math.floor(card.rolloverCount)));
   }
+  if (typeof card.lapses === 'number') {
+    record.lapses = Math.max(0, Math.min(10000, Math.floor(card.lapses)));
+  }
+  if (typeof card.consecutiveGoods === 'number') {
+    record.consecutiveGoods = Math.max(0, Math.min(10000, Math.floor(card.consecutiveGoods)));
+  }
+  if (typeof card.suspended === 'boolean') {
+    record.suspended = card.suspended;
+  }
 
   if (Array.isArray(card.variables) && card.variables.length > 0) {
     const bounded = card.variables.slice(0, 20);
@@ -166,7 +218,7 @@ function serializeCardForFirestore(card: Flashcard, uid: string, existingCreated
   return record;
 }
 
-function deserializeCardFromFirestore(id: string, data: Record<string, any>): Flashcard {
+export function deserializeCardFromFirestore(id: string, data: Record<string, any>): Flashcard {
   const symbols: string[] = Array.isArray(data.variableSymbols) ? data.variableSymbols : [];
   const meanings: string[] = Array.isArray(data.variableMeanings) ? data.variableMeanings : [];
   const units: string[] = Array.isArray(data.variableUnits) ? data.variableUnits : [];
@@ -177,6 +229,12 @@ function deserializeCardFromFirestore(id: string, data: Record<string, any>): Fl
     unit: units[idx] || undefined,
   }));
 
+  const rawState = data.state;
+  const normalizedState: Flashcard['state'] =
+    rawState === 'new' || rawState === 'learning' || rawState === 'review'
+      ? rawState
+      : 'review';
+
   return {
     id,
     deckId: data.deckId,
@@ -185,6 +243,9 @@ function deserializeCardFromFirestore(id: string, data: Record<string, any>): Fl
     variables: variables.length > 0 ? variables : undefined,
     explanation: data.explanation,
     category: data.category,
+    conditions: data.conditions,
+    derivation: data.derivation,
+    derivationSummary: data.derivation,
     repetitionStage: data.repetitionStage || 'statement',
     intervalDays: Number(data.intervalDays) || 0,
     easeFactor: Number(data.easeFactor) || 2.5,
@@ -194,32 +255,47 @@ function deserializeCardFromFirestore(id: string, data: Record<string, any>): Fl
     firstTimeReviewedAt: data.firstTimeReviewedAt,
     shiftedFromDate: data.shiftedFromDate,
     rolloverCount: data.rolloverCount,
-    state: data.state || 'new',
+    lapses: typeof data.lapses === 'number' ? data.lapses : 0,
+    consecutiveGoods: typeof data.consecutiveGoods === 'number' ? data.consecutiveGoods : 0,
+    suspended: Boolean(data.suspended),
+    createdAt: typeof data.createdAt === 'string' ? data.createdAt : undefined,
+    state: normalizedState,
   };
 }
 
-function deserializeDeckFromFirestore(id: string, data: Record<string, any>): Deck {
+export function deserializeDeckFromFirestore(id: string, data: Record<string, any>): Deck {
+  const columnMapping: ColumnMapping = {
+    statementCol: data.statementCol || 'Statement',
+    formulaCol: data.formulaCol || 'Formula',
+    variablesCol: data.variablesCol || undefined,
+    explanationCol: data.explanationCol || undefined,
+    categoryCol: data.categoryCol || undefined,
+    conditionsCol: data.conditionsCol || undefined,
+    derivationCol: data.derivationCol || undefined,
+  };
+
   return {
     id,
     name: data.name,
     description: data.description,
+    sheetName: data.sheetName || undefined,
     googleDriveFileId: data.googleDriveFileId,
     googleDriveFileName: data.googleDriveFileName,
     googleDriveMimeType: data.googleDriveMimeType,
     googleDriveModifiedTime: data.googleDriveModifiedTime,
     lastSyncedAt: data.lastSyncedAt || new Date().toISOString(),
     syncIntervalHours: Number(data.syncIntervalHours) || 24,
-    columnMapping: {
-      statementCol: 'Statement',
-      formulaCol: 'Formula',
-      variablesCol: 'Variables',
-      explanationCol: 'Explanation',
-      categoryCol: 'Category',
-    },
+    columnMapping,
     cardsCount: Number(data.cardsCount) || 0,
+    newCardsPerDayOverride:
+      typeof data.newCardsPerDayOverride === 'number' ? data.newCardsPerDayOverride : undefined,
+    createdAt: typeof data.createdAt === 'string' ? data.createdAt : undefined,
   };
 }
 
+/**
+ * Syncs a deck and its cards in chunks of <= 450 operations with zero sequential getDoc reads.
+ */
 export async function syncDeckAndCardsToFirestore(
   deck: Deck,
   deckCards: Flashcard[]
@@ -231,29 +307,33 @@ export async function syncDeckAndCardsToFirestore(
   const deckRef = doc(db, 'decks', deckDocId);
 
   try {
-    const existingSnap = await getDoc(deckRef);
-    const existingCreatedAt = existingSnap.exists() ? existingSnap.data()?.createdAt : undefined;
+    const operations: Array<{ ref: ReturnType<typeof doc>; payload: Record<string, any> }> = [
+      {
+        ref: deckRef,
+        payload: serializeDeckForFirestore(deck, user.uid),
+      },
+      ...deckCards.map(card => ({
+        ref: doc(db, 'cards', sanitizeId(card.id)),
+        payload: serializeCardForFirestore({ ...card, deckId: deckDocId }, user.uid),
+      })),
+    ];
 
-    const batch = writeBatch(db);
-    batch.set(deckRef, serializeDeckForFirestore(deck, user.uid, existingCreatedAt));
-
-    for (const card of deckCards) {
-      const cardDocId = sanitizeId(card.id);
-      const cardRef = doc(db, 'cards', cardDocId);
-      const cardSnap = await getDoc(cardRef);
-      const cardCreatedAt = cardSnap.exists() ? cardSnap.data()?.createdAt : undefined;
-      batch.set(
-        cardRef,
-        serializeCardForFirestore({ ...card, deckId: deckDocId }, user.uid, cardCreatedAt)
-      );
+    for (let i = 0; i < operations.length; i += BATCH_CHUNK_SIZE) {
+      const chunk = operations.slice(i, i + BATCH_CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        batch.set(op.ref, op.payload, { merge: true });
+      }
+      await batch.commit();
     }
-
-    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `decks/${deckDocId}`);
   }
 }
 
+/**
+ * Writes a single card update to Firestore using merge write without a pre-read getDoc.
+ */
 export async function syncSingleCardToFirestore(card: Flashcard): Promise<void> {
   const user = auth.currentUser;
   if (!user || !user.emailVerified) return;
@@ -262,29 +342,27 @@ export async function syncSingleCardToFirestore(card: Flashcard): Promise<void> 
   const cardRef = doc(db, 'cards', cardDocId);
 
   try {
-    const existingSnap = await getDoc(cardRef);
-    const existingCreatedAt = existingSnap.exists() ? existingSnap.data()?.createdAt : undefined;
-    await setDoc(cardRef, serializeCardForFirestore(card, user.uid, existingCreatedAt));
+    await setDoc(cardRef, serializeCardForFirestore(card, user.uid), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `cards/${cardDocId}`);
   }
 }
 
+/**
+ * Writes the study streak once per session end using a single merge write.
+ */
 export async function syncStreakToFirestore(streak: StudyStreakState): Promise<void> {
   const user = auth.currentUser;
   if (!user || !user.emailVerified) return;
 
   const streakRef = doc(db, 'user_streaks', user.uid);
   try {
-    const existingSnap = await getDoc(streakRef);
-    const existingCreatedAt = existingSnap.exists() ? existingSnap.data()?.createdAt : undefined;
-
     const payload: Record<string, any> = {
       ownerId: user.uid,
       currentStreak: Math.max(0, Math.min(36500, Math.floor(streak.currentStreak || 0))),
       bestStreak: Math.max(0, Math.min(36500, Math.floor(streak.bestStreak || 0))),
       completedDates: (streak.completedDates || []).slice(0, 1000).map(d => truncateStr(d, 32)),
-      createdAt: existingCreatedAt || serverTimestamp(),
+      createdAt: truncateStr(streak.lastStudiedDate || new Date().toISOString(), 64),
       updatedAt: serverTimestamp(),
     };
 
@@ -292,7 +370,7 @@ export async function syncStreakToFirestore(streak: StudyStreakState): Promise<v
       payload.lastStudiedDate = truncateStr(streak.lastStudiedDate, 32);
     }
 
-    await setDoc(streakRef, payload);
+    await setDoc(streakRef, payload, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `user_streaks/${user.uid}`);
   }
@@ -307,12 +385,19 @@ export async function deleteDeckAndCardsFromFirestore(
 
   const deckDocId = sanitizeId(deckId);
   try {
-    const batch = writeBatch(db);
-    for (const cId of cardIds) {
-      batch.delete(doc(db, 'cards', sanitizeId(cId)));
+    const refs = [
+      ...cardIds.map(cId => doc(db, 'cards', sanitizeId(cId))),
+      doc(db, 'decks', deckDocId),
+    ];
+
+    for (let i = 0; i < refs.length; i += BATCH_CHUNK_SIZE) {
+      const chunk = refs.slice(i, i + BATCH_CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const r of chunk) {
+        batch.delete(r);
+      }
+      await batch.commit();
     }
-    batch.delete(doc(db, 'decks', deckDocId));
-    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `decks/${deckDocId}`);
   }
@@ -381,7 +466,6 @@ export async function loadOrBootstrapUserFirestoreState(
     handleFirestoreError(error, OperationType.GET, `user_streaks/${user.uid}`);
   }
 
-  // If the user has no cloud decks yet, bootstrap their local decks & cards to Firestore
   if (cloudDecks.length === 0 && localDecks.length > 0) {
     for (const d of localDecks) {
       const dCards = localCards.filter(c => c.deckId === d.id);
@@ -391,7 +475,6 @@ export async function loadOrBootstrapUserFirestoreState(
     return { decks: localDecks, cards: localCards, streak: localStreak };
   }
 
-  // Merge any local-only decks (such as newly imported MCP decks) into Firestore
   const cloudDeckIds = new Set(cloudDecks.map(d => d.id));
   const mergedDecks = [...cloudDecks];
   const mergedCards = [...cloudCards];

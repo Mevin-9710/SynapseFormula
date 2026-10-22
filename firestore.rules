@@ -27,6 +27,10 @@ service cloud.firestore {
       return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= maxItemLen));
     }
 
+    function isValidCreatedAt(val) {
+      return val is timestamp || (val is string && val.size() >= 1 && val.size() <= 64);
+    }
+
     // Validation Blueprint: DeckRecord
     function isValidDeckRecord(data) {
       return data.keys().hasAll([
@@ -43,6 +47,15 @@ service cloud.firestore {
           'ownerId',
           'name',
           'description',
+          'sheetName',
+          'statementCol',
+          'formulaCol',
+          'variablesCol',
+          'explanationCol',
+          'categoryCol',
+          'conditionsCol',
+          'derivationCol',
+          'newCardsPerDayOverride',
           'cardsCount',
           'syncIntervalHours',
           'lastSyncedAt',
@@ -63,6 +76,15 @@ service cloud.firestore {
         data.name.size() <= 200 &&
         data.description is string &&
         data.description.size() <= 1000 &&
+        (!('sheetName' in data) || (data.sheetName is string && data.sheetName.size() >= 1 && data.sheetName.size() <= 120)) &&
+        (!('statementCol' in data) || (data.statementCol is string && data.statementCol.size() >= 1 && data.statementCol.size() <= 120)) &&
+        (!('formulaCol' in data) || (data.formulaCol is string && data.formulaCol.size() >= 1 && data.formulaCol.size() <= 120)) &&
+        (!('variablesCol' in data) || (data.variablesCol is string && data.variablesCol.size() >= 1 && data.variablesCol.size() <= 120)) &&
+        (!('explanationCol' in data) || (data.explanationCol is string && data.explanationCol.size() >= 1 && data.explanationCol.size() <= 120)) &&
+        (!('categoryCol' in data) || (data.categoryCol is string && data.categoryCol.size() >= 1 && data.categoryCol.size() <= 120)) &&
+        (!('conditionsCol' in data) || (data.conditionsCol is string && data.conditionsCol.size() >= 1 && data.conditionsCol.size() <= 120)) &&
+        (!('derivationCol' in data) || (data.derivationCol is string && data.derivationCol.size() >= 1 && data.derivationCol.size() <= 120)) &&
+        (!('newCardsPerDayOverride' in data) || (data.newCardsPerDayOverride is int && data.newCardsPerDayOverride >= 0 && data.newCardsPerDayOverride <= 1000)) &&
         data.cardsCount is int &&
         data.cardsCount >= 0 &&
         data.cardsCount <= 10000 &&
@@ -76,7 +98,7 @@ service cloud.firestore {
         (!('googleDriveFileName' in data) || (data.googleDriveFileName is string && data.googleDriveFileName.size() >= 1 && data.googleDriveFileName.size() <= 256)) &&
         (!('googleDriveMimeType' in data) || (data.googleDriveMimeType is string && data.googleDriveMimeType.size() >= 1 && data.googleDriveMimeType.size() <= 128)) &&
         (!('googleDriveModifiedTime' in data) || (data.googleDriveModifiedTime is string && data.googleDriveModifiedTime.size() >= 1 && data.googleDriveModifiedTime.size() <= 64)) &&
-        data.createdAt is timestamp &&
+        isValidCreatedAt(data.createdAt) &&
         data.updatedAt is timestamp;
     }
 
@@ -109,10 +131,15 @@ service cloud.firestore {
           'state',
           'explanation',
           'category',
+          'conditions',
+          'derivation',
           'lastReviewedAt',
           'firstTimeReviewedAt',
           'shiftedFromDate',
           'rolloverCount',
+          'lapses',
+          'consecutiveGoods',
+          'suspended',
           'variableSymbols',
           'variableMeanings',
           'variableUnits',
@@ -149,17 +176,22 @@ service cloud.firestore {
         data.dueDate.size() >= 1 &&
         data.dueDate.size() <= 64 &&
         data.state is string &&
-        data.state in ['new', 'learning', 'review', 'mastered'] &&
+        data.state in ['new', 'learning', 'review'] &&
         (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 2000)) &&
         (!('category' in data) || (data.category is string && data.category.size() <= 200)) &&
+        (!('conditions' in data) || (data.conditions is string && data.conditions.size() <= 1000)) &&
+        (!('derivation' in data) || (data.derivation is string && data.derivation.size() <= 2000)) &&
         (!('lastReviewedAt' in data) || (data.lastReviewedAt is string && data.lastReviewedAt.size() >= 1 && data.lastReviewedAt.size() <= 64)) &&
         (!('firstTimeReviewedAt' in data) || (data.firstTimeReviewedAt is string && data.firstTimeReviewedAt.size() >= 1 && data.firstTimeReviewedAt.size() <= 64)) &&
         (!('shiftedFromDate' in data) || (data.shiftedFromDate is string && data.shiftedFromDate.size() >= 1 && data.shiftedFromDate.size() <= 32)) &&
         (!('rolloverCount' in data) || (data.rolloverCount is int && data.rolloverCount >= 0 && data.rolloverCount <= 10000)) &&
+        (!('lapses' in data) || (data.lapses is int && data.lapses >= 0 && data.lapses <= 10000)) &&
+        (!('consecutiveGoods' in data) || (data.consecutiveGoods is int && data.consecutiveGoods >= 0 && data.consecutiveGoods <= 10000)) &&
+        (!('suspended' in data) || (data.suspended is bool)) &&
         (!('variableSymbols' in data) || isBoundedStringList(data.variableSymbols, 20, 200)) &&
         (!('variableMeanings' in data) || isBoundedStringList(data.variableMeanings, 20, 500)) &&
         (!('variableUnits' in data) || isBoundedStringList(data.variableUnits, 20, 100)) &&
-        data.createdAt is timestamp &&
+        isValidCreatedAt(data.createdAt) &&
         data.updatedAt is timestamp;
     }
 
@@ -195,7 +227,7 @@ service cloud.firestore {
         data.bestStreak <= 36500 &&
         isBoundedStringList(data.completedDates, 1000, 32) &&
         (!('lastStudiedDate' in data) || (data.lastStudiedDate is string && data.lastStudiedDate.size() >= 1 && data.lastStudiedDate.size() <= 32)) &&
-        data.createdAt is timestamp &&
+        isValidCreatedAt(data.createdAt) &&
         data.updatedAt is timestamp;
     }
 
@@ -216,18 +248,25 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         isValidId(deckId) &&
         isValidDeckRecord(incoming()) &&
-        incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isSignedIn() &&
         isValidId(deckId) &&
         isValidDeckRecord(incoming()) &&
         existing().ownerId == request.auth.uid &&
         incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'name',
           'description',
+          'sheetName',
+          'statementCol',
+          'formulaCol',
+          'variablesCol',
+          'explanationCol',
+          'categoryCol',
+          'conditionsCol',
+          'derivationCol',
+          'newCardsPerDayOverride',
           'cardsCount',
           'syncIntervalHours',
           'lastSyncedAt',
@@ -235,6 +274,7 @@ service cloud.firestore {
           'googleDriveFileName',
           'googleDriveMimeType',
           'googleDriveModifiedTime',
+          'createdAt',
           'updatedAt'
         ]);
       allow delete: if isSignedIn() && isValidId(deckId) && existing().ownerId == request.auth.uid;
@@ -247,7 +287,6 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         isValidId(cardId) &&
         isValidCardRecord(incoming()) &&
-        incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
         ownsParentDeck(incoming().deckId);
       allow update: if isSignedIn() &&
@@ -256,7 +295,6 @@ service cloud.firestore {
         existing().ownerId == request.auth.uid &&
         incoming().ownerId == existing().ownerId &&
         incoming().deckId == existing().deckId &&
-        incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         ownsParentDeck(incoming().deckId) &&
         incoming().diff(existing()).affectedKeys().hasOnly([
@@ -270,13 +308,19 @@ service cloud.firestore {
           'state',
           'explanation',
           'category',
+          'conditions',
+          'derivation',
           'lastReviewedAt',
           'firstTimeReviewedAt',
           'shiftedFromDate',
           'rolloverCount',
+          'lapses',
+          'consecutiveGoods',
+          'suspended',
           'variableSymbols',
           'variableMeanings',
           'variableUnits',
+          'createdAt',
           'updatedAt'
         ]);
       allow delete: if isSignedIn() && isValidId(cardId) && existing().ownerId == request.auth.uid;
@@ -289,7 +333,6 @@ service cloud.firestore {
         isValidId(userId) &&
         userId == request.auth.uid &&
         isValidStreakRecord(incoming()) &&
-        incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isSignedIn() &&
         isValidId(userId) &&
@@ -297,13 +340,13 @@ service cloud.firestore {
         isValidStreakRecord(incoming()) &&
         existing().ownerId == request.auth.uid &&
         incoming().ownerId == existing().ownerId &&
-        incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'currentStreak',
           'bestStreak',
           'completedDates',
           'lastStudiedDate',
+          'createdAt',
           'updatedAt'
         ]);
       allow delete: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && existing().ownerId == request.auth.uid;

@@ -7,7 +7,77 @@
 
 :root {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color-scheme: light;
+  color-scheme: light dark;
+
+  /* Light Mode Monochrome Glass Variables */
+  --bg-base: #f2f4f7;
+  --blob-1: rgba(255, 255, 255, 0.95);
+  --blob-2: rgba(218, 224, 235, 0.65);
+  --blob-3: rgba(229, 231, 235, 0.75);
+
+  --text-primary: #0f1115;
+  --text-secondary: rgba(15, 17, 21, 0.76);
+  --text-muted: rgba(15, 17, 21, 0.72);
+
+  /* Opaque fallback & reduced-transparency surfaces */
+  --chrome-bg-opaque: rgba(250, 251, 252, 0.97);
+  --chrome-bg-blur: rgba(250, 251, 252, 0.82);
+  --chrome-border: rgba(15, 17, 21, 0.11);
+
+  /* Fake-glass card surfaces (NO backdrop-filter for 60fps scrolling) */
+  --card-bg: rgba(255, 255, 255, 0.76);
+  --card-bg-elevated: rgba(255, 255, 255, 0.88);
+  --card-border: rgba(15, 17, 21, 0.11);
+  --card-highlight: rgba(255, 255, 255, 0.85);
+  --card-shadow: 0 2px 10px -2px rgba(15, 17, 21, 0.05);
+
+  /* Interactive buttons */
+  --btn-bg: rgba(15, 17, 21, 0.055);
+  --btn-bg-active: rgba(15, 17, 21, 0.12);
+  --btn-border: rgba(15, 17, 21, 0.14);
+  --btn-primary-bg: #0f1115;
+  --btn-primary-text: #ffffff;
+  --btn-primary-active: #272a30;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-base: #0d0f12;
+    --blob-1: rgba(38, 43, 54, 0.55);
+    --blob-2: rgba(24, 28, 36, 0.65);
+    --blob-3: rgba(32, 36, 46, 0.5);
+
+    --text-primary: #f5f7fa;
+    --text-secondary: rgba(245, 247, 250, 0.82);
+    --text-muted: rgba(245, 247, 250, 0.74);
+
+    --chrome-bg-opaque: rgba(18, 20, 25, 0.97);
+    --chrome-bg-blur: rgba(18, 20, 25, 0.82);
+    --chrome-border: rgba(255, 255, 255, 0.13);
+
+    --card-bg: rgba(26, 29, 36, 0.76);
+    --card-bg-elevated: rgba(32, 36, 44, 0.88);
+    --card-border: rgba(255, 255, 255, 0.12);
+    --card-highlight: rgba(255, 255, 255, 0.07);
+    --card-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35);
+
+    --btn-bg: rgba(255, 255, 255, 0.07);
+    --btn-bg-active: rgba(255, 255, 255, 0.15);
+    --btn-border: rgba(255, 255, 255, 0.16);
+    --btn-primary-bg: #f5f7fa;
+    --btn-primary-text: #0d0f12;
+    --btn-primary-active: #dce0e8;
+  }
+}
+
+html,
+body {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 15px;
+  color: var(--text-primary);
+  touch-action: manipulation;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 * {
@@ -15,80 +85,201 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Minimalist Apple Liquid Glass Styling */
+button,
+a,
+input,
+select,
+textarea,
+label {
+  touch-action: manipulation;
+}
+
+/* Prevent iOS Safari zoom on focus: all inputs & selects at least 16px */
+input,
+select,
+textarea {
+  font-size: 16px !important;
+}
+
+/* Fixed subtle monochrome gradient with soft light blobs so glass reads as glass (5.20) */
+.mobile-canvas-bg {
+  background-color: var(--bg-base);
+  background-image:
+    radial-gradient(circle at 15% 12%, var(--blob-1) 0%, transparent 52%),
+    radial-gradient(circle at 85% 28%, var(--blob-2) 0%, transparent 48%),
+    radial-gradient(circle at 50% 85%, var(--blob-3) 0%, transparent 55%);
+  background-attachment: fixed;
+  color: var(--text-primary);
+}
+
+/*
+ * REAL BLUR CHROME ONLY (5.20):
+ * Sticky top bar, bottom nav, bottom sheets/modals, and study rating bar.
+ * Blur radius 12-16px max. Never nested, never animated, no will-change.
+ */
+.glass-chrome {
+  background-color: var(--chrome-bg-opaque);
+  border-color: var(--chrome-border);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-chrome {
+    background-color: var(--chrome-bg-blur);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+}
+
+/* Fall back to opaque surfaces under prefers-reduced-transparency or user "Reduce effects" switch */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-chrome {
+    background-color: var(--chrome-bg-opaque) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .glass-card,
+  .glass-panel {
+    background-color: var(--chrome-bg-opaque) !important;
+  }
+}
+
+html.reduce-effects .glass-chrome {
+  background-color: var(--chrome-bg-opaque) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.reduce-effects .glass-card,
+html.reduce-effects .glass-panel {
+  background-color: var(--chrome-bg-opaque) !important;
+  box-shadow: none !important;
+}
+
+/*
+ * FAKE GLASS FOR SCROLLING LISTS & CARDS (5.20):
+ * Deck rows and cards inside scrolling lists MUST NOT use backdrop-filter!
+ * Translucent fill, 1px light border, soft inner highlight, subtle shadow.
+ */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: inset 0 1px 0 0 var(--card-highlight);
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.04);
-}
-
-.glass-card-hover {
-  transition: transform 0.15s ease, background-color 0.15s ease;
-}
-
-.glass-card-hover:active {
-  transform: scale(0.985);
+  background-color: var(--card-bg-elevated);
+  border: 1px solid var(--card-border);
+  box-shadow: inset 0 1px 0 0 var(--card-highlight), var(--card-shadow);
 }
 
 .glass-button {
-  background: rgba(0, 0, 0, 0.03);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  transition: all 0.15s ease;
+  background-color: var(--btn-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--btn-border);
+  transition: background-color 0.12s ease, transform 0.12s ease;
 }
 
 .glass-button:active {
-  background: rgba(0, 0, 0, 0.08);
-  transform: scale(0.97);
+  background-color: var(--btn-bg-active);
+  transform: scale(0.98);
 }
 
 .glass-button-primary {
-  background: #000000;
-  color: #ffffff;
-  border: 1px solid #000000;
-  transition: all 0.15s ease;
+  background-color: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  border: 1px solid var(--btn-primary-bg);
+  transition: background-color 0.12s ease, transform 0.12s ease;
 }
 
 .glass-button-primary:active {
-  background: #222222;
-  transform: scale(0.97);
+  background-color: var(--btn-primary-active);
+  transform: scale(0.98);
 }
 
-/* KaTeX custom sizing inside JetBrains Mono container */
+/* Text contrast helpers (>= 70% opacity minimum) */
+.text-secondary-contrast {
+  color: var(--text-secondary);
+}
+
+.text-muted-contrast {
+  color: var(--text-muted);
+}
+
+/* KaTeX responsive scaling & fade hint fallback (5.11) */
 .katex-display {
-  margin: 0.35em 0 !important;
+  margin: 0.25em 0 !important;
 }
 
-/* Mobile clean canvas background */
-.mobile-canvas-bg {
-  background-color: #f6f7f8;
+.formula-clamp-lg {
+  font-size: clamp(1.05rem, 4.3vw, 1.5rem);
 }
 
-/* Safe area padding for mobile notches & home indicator */
+.formula-clamp-md {
+  font-size: clamp(0.95rem, 3.8vw, 1.25rem);
+}
+
+.formula-clamp-sm {
+  font-size: clamp(0.85rem, 3.4vw, 1.05rem);
+}
+
+.formula-scroll-fade {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Safe area padding for mobile notches & home indicator (5.18: fallback is 0px, not 16px) */
 .pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 16px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Smooth animated page restoration when switching views */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.overscroll-contain {
+  overscroll-behavior-y: contain;
+}
+
+/* Short page transition animation, disabled under prefers-reduced-motion (5.20) */
 @keyframes pageRestoreEnter {
   0% {
     opacity: 0;
-    transform: translateY(10px) scale(0.992);
+    transform: translateY(6px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
 .page-restore-enter {
-  animation: pageRestoreEnter 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: pageRestoreEnter 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .page-restore-enter {
+    animation: none !important;
+  }
+}
+
+html.reduce-effects .page-restore-enter {
+  animation: none !important;
 }

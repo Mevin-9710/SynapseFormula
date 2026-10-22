@@ -1,11 +1,248 @@
-import { Deck, Flashcard, DeckSessionState, StudySessionMode, StudyStreakState } from '../types';
-import { getLocalDateKey, isCardDueToday } from './srsEngine';
-import { syncSingleCardToFirestore, syncStreakToFirestore } from './firestoreSync';
+import {
+  Deck,
+  Flashcard,
+  DeckSessionState,
+  StudySessionMode,
+  StudyStreakState,
+  UserSettings,
+  ReviewLogEntry,
+} from '../types';
+import {
+  DEFAULT_USER_SETTINGS,
+  getLocalDateKey,
+  isCardDueToday,
+  sortDueCardsMostOverdueFirst,
+} from './srsEngine';
+import {
+  syncSingleCardToFirestore,
+  syncStreakToFirestore,
+  syncDeckAndCardsToFirestore,
+} from './firestoreSync';
+import {
+  getReviewLogsSync,
+  initReviewLogStore,
+  mergeImportedReviewLogs,
+} from './reviewLog';
 
 const DECKS_KEY = 'synapse_formula_decks_v1';
 const CARDS_KEY = 'synapse_formula_cards_v1';
 const DUE_SESSION_KEY = 'synapse_formula_due_session_v1';
 const STREAK_KEY = 'synapse_formula_streak_v1';
+const SETTINGS_KEY = 'synapse_formula_settings_v1';
+const LAST_CLOUD_SYNC_KEY = 'synapse_last_cloud_sync_ts_v1';
+const OFFLINE_DIRTY_CARDS_KEY = 'synapse_offline_dirty_cards_v1';
+const COMPLETED_FIRST_SESSION_KEY = 'synapse_completed_first_session_v1';
+
+const hasDomStorage = (): boolean => typeof localStorage !== 'undefined';
+
+export const getUserSettings = (): UserSettings => {
+  if (!hasDomStorage()) return { ...DEFAULT_USER_SETTINGS };
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_USER_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return {
+      maxIntervalDays: Math.max(1, Math.min(365, Number(parsed.maxIntervalDays) || DEFAULT_USER_SETTINGS.maxIntervalDays)),
+      newCardsPerDay: Math.max(1, Math.min(500, Number(parsed.newCardsPerDay) || DEFAULT_USER_SETTINGS.newCardsPerDay)),
+      dailyReviewCap: Math.max(10, Math.min(2000, Number(parsed.dailyReviewCap) || DEFAULT_USER_SETTINGS.dailyReviewCap)),
+      examDate: typeof parsed.examDate === 'string' && parsed.examDate ? parsed.examDate : undefined,
+      reminderTime: typeof parsed.reminderTime === 'string' && parsed.reminderTime ? parsed.reminderTime : undefined,
+      remindersEnabled: Boolean(parsed.remindersEnabled),
+      swipeGesturesEnabled: Boolean(parsed.swipeGesturesEnabled),
+      hapticsEnabled: parsed.hapticsEnabled !== undefined ? Boolean(parsed.hapticsEnabled) : true,
+      reduceEffects: Boolean(parsed.reduceEffects),
+    };
+  } catch {
+    return { ...DEFAULT_USER_SETTINGS };
+  }
+};
+
+export const saveUserSettings = (settings: UserSettings): void => {
+  if (!hasDomStorage()) return;
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.error('Error saving user settings:', err);
+  }
+};
+
+export const recordCloudSyncTimestamp = (ts = Date.now()): void => {
+  if (!hasDomStorage()) return;
+  try {
+    localStorage.setItem(LAST_CLOUD_SYNC_KEY, String(ts));
+  } catch {
+    // ignore
+  }
+};
+
+export const getLastCloudSyncTimestamp = (): number | null => {
+  if (!hasDomStorage()) return null;
+  try {
+    const raw = localStorage.getItem(LAST_CLOUD_SYNC_KEY);
+    if (!raw) return null;
+    const num = Number(raw);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  } catch {
+    return null;
+  }
+};
+
+export const markFirstSessionCompleted = (): void => {
+  if (!hasDomStorage()) return;
+  try {
+    localStorage.setItem(COMPLETED_FIRST_SESSION_KEY, 'true');
+  } catch {
+    // ignore
+  }
+};
+
+export const hasCompletedFirstSession = (): boolean => {
+  if (!hasDomStorage()) return false;
+  try {
+    return localStorage.getItem(COMPLETED_FIRST_SESSION_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+export const queueCardForOfflineSync = (cardId: string): void => {
+  if (!hasDomStorage()) return;
+  try {
+    const raw = localStorage.getItem(OFFLINE_DIRTY_CARDS_KEY);
+    const ids: string[] = raw ? JSON.parse(raw) : [];
+    if (!ids.includes(cardId)) {
+      ids.push(cardId);
+      localStorage.setItem(OFFLINE_DIRTY_CARDS_KEY, JSON.stringify(ids));
+    }
+  } catch {
+    // ignore
+  }
+};
+
+export const getOfflinePendingSyncCount = (): number => {
+  if (!hasDomStorage()) return 0;
+  try {
+    const raw = localStorage.getItem(OFFLINE_DIRTY_CARDS_KEY);
+    const ids: string[] = raw ? JSON.parse(raw) : [];
+    return ids.length;
+  } catch {
+    return 0;
+  }
+};
+
+export const flushOfflineSyncQueue = async (): Promise<number> => {
+  if (!hasDomStorage()) return 0;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 0;
+  try {
+    const raw = localStorage.getItem(OFFLINE_DIRTY_CARDS_KEY);
+    if (!raw) return 0;
+    const ids: string[] = JSON.parse(raw);
+    if (ids.length === 0) return 0;
+
+    const allCards = getStoredCards();
+    let syncedCount = 0;
+    for (const id of ids) {
+      const card = allCards.find(c => c.id === id);
+      if (card) {
+        await syncSingleCardToFirestore(card);
+        syncedCount++;
+      }
+    }
+    localStorage.removeItem(OFFLINE_DIRTY_CARDS_KEY);
+    recordCloudSyncTimestamp();
+    return syncedCount;
+  } catch {
+    return 0;
+  }
+};
+
+export const checkLocalStorageQuotaWarning = (): {
+  usedBytes: number;
+  pctUsed: number;
+  isNearQuota: boolean;
+} => {
+  if (!hasDomStorage()) return { usedBytes: 0, pctUsed: 0, isNearQuota: false };
+  try {
+    let totalChars = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k) {
+        const v = localStorage.getItem(k) || '';
+        totalChars += k.length + v.length;
+      }
+    }
+    const usedBytes = totalChars * 2;
+    const quotaBytes = 5 * 1024 * 1024; // ~5 MB standard browser localStorage limit
+    const pctUsed = Math.min(100, Math.round((usedBytes / quotaBytes) * 100));
+    return {
+      usedBytes,
+      pctUsed,
+      isNearQuota: pctUsed >= 80,
+    };
+  } catch {
+    return { usedBytes: 0, pctUsed: 0, isNearQuota: false };
+  }
+};
+
+/**
+ * Computes how many new cards can still be introduced today for a given deck,
+ * taking into account the global newCardsPerDay setting and optional per-deck override.
+ */
+export const getNewCardQuotaForDeck = (
+  deck: Deck,
+  deckCards: Flashcard[],
+  allCards: Flashcard[],
+  settings: UserSettings = getUserSettings(),
+  now: Date = new Date()
+): {
+  availableToday: number;
+  unseenLeftInDeck: number;
+  dailyLimitForDeck: number;
+  introducedTodayInDeck: number;
+  introducedTodayGlobal: number;
+} => {
+  const todayKey = getLocalDateKey(now);
+  const unseenLeftInDeck = deckCards.filter(
+    c => !c.suspended && !c.firstTimeReviewedAt && c.repetitionCount === 0
+  ).length;
+
+  const introducedTodayInDeck = deckCards.filter(
+    c =>
+      (c.firstTimeReviewedAt && getLocalDateKey(c.firstTimeReviewedAt) === todayKey) ||
+      (c.lastReviewedAt && c.repetitionCount === 1 && getLocalDateKey(c.lastReviewedAt) === todayKey)
+  ).length;
+
+  const introducedTodayGlobal = allCards.filter(
+    c =>
+      (c.firstTimeReviewedAt && getLocalDateKey(c.firstTimeReviewedAt) === todayKey) ||
+      (c.lastReviewedAt && c.repetitionCount === 1 && getLocalDateKey(c.lastReviewedAt) === todayKey)
+  ).length;
+
+  const hasOverride =
+    typeof deck.newCardsPerDayOverride === 'number' && deck.newCardsPerDayOverride > 0;
+  const dailyLimitForDeck = hasOverride
+    ? deck.newCardsPerDayOverride!
+    : settings.newCardsPerDay;
+
+  const remainingDeckQuota = Math.max(0, dailyLimitForDeck - introducedTodayInDeck);
+  const remainingGlobalQuota = hasOverride
+    ? remainingDeckQuota
+    : Math.max(0, settings.newCardsPerDay - introducedTodayGlobal);
+
+  const availableToday = Math.min(
+    unseenLeftInDeck,
+    remainingDeckQuota,
+    remainingGlobalQuota
+  );
+
+  return {
+    availableToday,
+    unseenLeftInDeck,
+    dailyLimitForDeck,
+    introducedTodayInDeck,
+    introducedTodayGlobal,
+  };
+};
 
 export const calculateConsecutiveStreak = (completedDates: string[]): number => {
   const dateSet = new Set(completedDates);
@@ -32,6 +269,13 @@ export const calculateConsecutiveStreak = (completedDates: string[]): number => 
 };
 
 export const getStudyStreakState = (): StudyStreakState => {
+  if (!hasDomStorage()) {
+    return {
+      currentStreak: 0,
+      bestStreak: 0,
+      completedDates: [],
+    };
+  }
   try {
     const raw = localStorage.getItem(STREAK_KEY);
     if (!raw) {
@@ -61,6 +305,7 @@ export const getStudyStreakState = (): StudyStreakState => {
 };
 
 export const saveStudyStreakState = (state: StudyStreakState): void => {
+  if (!hasDomStorage()) return;
   try {
     localStorage.setItem(STREAK_KEY, JSON.stringify(state));
   } catch (err) {
@@ -97,7 +342,19 @@ export const evaluateAndRecordDailyStreak = (allCards: Flashcard[]): StudyStreak
   return nextState;
 };
 
+/**
+ * Evaluates and writes the streak to Firestore once per session end (not on every card rating).
+ */
+export const syncSessionEndStreakToFirestore = (allCards: Flashcard[]): StudyStreakState => {
+  const nextStreak = evaluateAndRecordDailyStreak(allCards);
+  syncStreakToFirestore(nextStreak)
+    .then(() => recordCloudSyncTimestamp())
+    .catch(err => console.error('Session-end streak Firestore sync failed:', err));
+  return nextStreak;
+};
+
 export const getStoredDecks = (): Deck[] => {
+  if (!hasDomStorage()) return [];
   try {
     const raw = localStorage.getItem(DECKS_KEY);
     if (!raw) {
@@ -114,6 +371,7 @@ export const getStoredDecks = (): Deck[] => {
 };
 
 export const saveStoredDecks = (decks: Deck[]): void => {
+  if (!hasDomStorage()) return;
   try {
     localStorage.setItem(DECKS_KEY, JSON.stringify(decks));
   } catch (err) {
@@ -122,10 +380,18 @@ export const saveStoredDecks = (decks: Deck[]): void => {
 };
 
 export const getStoredCards = (): Flashcard[] => {
+  if (!hasDomStorage()) return [];
   try {
     const raw = localStorage.getItem(CARDS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed: Flashcard[] = JSON.parse(raw);
+    return parsed.map(c => ({
+      ...c,
+      state:
+        c.state === 'new' || c.state === 'learning' || c.state === 'review'
+          ? c.state
+          : 'review',
+    }));
   } catch (err) {
     console.error('Error loading cards from storage:', err);
     return [];
@@ -133,6 +399,7 @@ export const getStoredCards = (): Flashcard[] => {
 };
 
 export const saveStoredCards = (cards: Flashcard[]): void => {
+  if (!hasDomStorage()) return;
   try {
     localStorage.setItem(CARDS_KEY, JSON.stringify(cards));
   } catch (err) {
@@ -144,6 +411,10 @@ export const getCardsForDeck = (deckId: string): Flashcard[] => {
   return getStoredCards().filter(c => c.deckId === deckId);
 };
 
+/**
+ * Updates a single card in local storage and writes only the card to Firestore (1 write, 0 reads).
+ * When offline, queues the card ID in localStorage for automatic sync when back online.
+ */
 export const updateCardInStorage = (updatedCard: Flashcard): void => {
   const cards = getStoredCards();
   const idx = cards.findIndex(c => c.id === updatedCard.id);
@@ -153,25 +424,86 @@ export const updateCardInStorage = (updatedCard: Flashcard): void => {
     cards.push(updatedCard);
   }
   saveStoredCards(cards);
-  const nextStreak = evaluateAndRecordDailyStreak(cards);
-  syncSingleCardToFirestore(updatedCard).catch(err =>
-    console.error('Background card Firestore sync failed:', err)
+  evaluateAndRecordDailyStreak(cards);
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    queueCardForOfflineSync(updatedCard.id);
+    return;
+  }
+
+  syncSingleCardToFirestore(updatedCard)
+    .then(() => recordCloudSyncTimestamp())
+    .catch(() => {
+      queueCardForOfflineSync(updatedCard.id);
+    });
+};
+
+/**
+ * Splits a leech/complex card into two focused cards in the same deck.
+ */
+export const splitCardInStorage = (
+  originalCard: Flashcard,
+  partA: { statement: string; formula: string; conditions?: string },
+  partB: { statement: string; formula: string; conditions?: string }
+): { updatedCards: Flashcard[]; updatedDecks: Deck[]; cardA: Flashcard; cardB: Flashcard } => {
+  const now = new Date().toISOString();
+  const cardA: Flashcard = {
+    ...originalCard,
+    statement: partA.statement.trim(),
+    formula: partA.formula.trim(),
+    conditions: partA.conditions?.trim() || originalCard.conditions,
+    intervalDays: 0,
+    repetitionCount: 0,
+    lapses: 0,
+    consecutiveGoods: 0,
+    state: 'new',
+    dueDate: now,
+  };
+  const cardB: Flashcard = {
+    ...originalCard,
+    id: `${originalCard.id}_split_${Date.now().toString(36)}`,
+    statement: partB.statement.trim(),
+    formula: partB.formula.trim(),
+    conditions: partB.conditions?.trim() || originalCard.conditions,
+    intervalDays: 0,
+    repetitionCount: 0,
+    lapses: 0,
+    consecutiveGoods: 0,
+    state: 'new',
+    dueDate: now,
+    createdAt: now,
+  };
+
+  const cards = getStoredCards();
+  const idx = cards.findIndex(c => c.id === originalCard.id);
+  if (idx >= 0) {
+    cards.splice(idx, 1, cardA, cardB);
+  } else {
+    cards.push(cardA, cardB);
+  }
+  saveStoredCards(cards);
+
+  const decks = getStoredDecks().map(d =>
+    d.id === originalCard.deckId ? { ...d, cardsCount: d.cardsCount + 1 } : d
   );
-  syncStreakToFirestore(nextStreak).catch(err =>
-    console.error('Background streak Firestore sync failed:', err)
-  );
+  saveStoredDecks(decks);
+
+  syncSingleCardToFirestore(cardA).catch(() => {});
+  syncSingleCardToFirestore(cardB).catch(() => {});
+
+  return { updatedCards: cards, updatedDecks: decks, cardA, cardB };
 };
 
 /**
  * Universally updates session resumption state for a specific deck or global due session.
- * Supports separate persistence for 'first-time' review vs 'recall' study.
  */
 export const saveDeckSessionState = (
   deckId: string,
   sessionState: DeckSessionState | undefined,
   mode: StudySessionMode = 'recall'
 ): void => {
-  if (deckId === '__due_today__' || mode === 'due-continuous') {
+  if (mode === 'practice') return;
+  if (deckId === '__due_today__' || mode === 'due-continuous' || mode === 'interleaved') {
     saveDueTodaySessionState(sessionState);
     return;
   }
@@ -215,30 +547,38 @@ export const saveDueTodaySessionState = (sessionState: DeckSessionState | undefi
 };
 
 /**
- * Automatically rolls over any incomplete due cards from past calendar days
- * to today's schedule so no unfinished cards from yesterday or earlier are stranded.
+ * Marks overdue cards from past calendar days with their original shiftedFromDate
+ * while preserving their relative overdue timestamps so the due queue can be sorted
+ * most-overdue first without losing overdue order.
  */
 export const rolloverOverdueCardsFromPastDays = (
   currentCards: Flashcard[]
 ): { updatedCards: Flashcard[]; shiftedCount: number; shiftedByDeck: Record<string, number> } => {
   const now = new Date();
   const todayKey = getLocalDateKey(now);
-  const todayMorning = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0).toISOString();
 
   let shiftedCount = 0;
   const shiftedByDeck: Record<string, number> = {};
 
   const updatedCards = currentCards.map(card => {
+    const normalizedState: Flashcard['state'] =
+      card.state === 'new' || card.state === 'learning' || card.state === 'review'
+        ? card.state
+        : 'review';
+
     const cardDateKey = getLocalDateKey(card.dueDate);
-    if (cardDateKey < todayKey) {
+    if (!card.suspended && cardDateKey < todayKey && !card.shiftedFromDate) {
       shiftedCount += 1;
       shiftedByDeck[card.deckId] = (shiftedByDeck[card.deckId] || 0) + 1;
       return {
         ...card,
+        state: normalizedState,
         shiftedFromDate: cardDateKey,
         rolloverCount: (card.rolloverCount || 0) + 1,
-        dueDate: todayMorning,
       };
+    }
+    if (card.state !== normalizedState) {
+      return { ...card, state: normalizedState };
     }
     return card;
   });
@@ -248,6 +588,56 @@ export const rolloverOverdueCardsFromPastDays = (
   }
 
   return { updatedCards, shiftedCount, shiftedByDeck };
+};
+
+/**
+ * Catch-up mode (2.2): Keeps the most-overdue `dailyReviewCap` cards due today
+ * and softly postpones excess due cards evenly across the next 3 days (+1d, +2d, +3d).
+ */
+export const applyCatchUpPostponement = (
+  currentCards: Flashcard[],
+  dailyReviewCap: number = getUserSettings().dailyReviewCap,
+  now: Date = new Date()
+): { updatedCards: Flashcard[]; postponedCount: number } => {
+  const dueCards = sortDueCardsMostOverdueFirst(
+    currentCards.filter(c => isCardDueToday(c, now))
+  );
+
+  if (dueCards.length <= dailyReviewCap) {
+    return { updatedCards: currentCards, postponedCount: 0 };
+  }
+
+  const excessCards = dueCards.slice(dailyReviewCap);
+  const excessPostponedDayMap = new Map<string, string>();
+  const todayKey = getLocalDateKey(now);
+
+  excessCards.forEach((card, idx) => {
+    const dayOffset = (idx % 3) + 1; // Spread evenly across next 3 days (+1, +2, +3)
+    const target = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + dayOffset,
+      9,
+      0,
+      0,
+      0
+    );
+    excessPostponedDayMap.set(card.id, target.toISOString());
+  });
+
+  const updatedCards = currentCards.map(card => {
+    const nextIso = excessPostponedDayMap.get(card.id);
+    if (!nextIso) return card;
+    return {
+      ...card,
+      shiftedFromDate: card.shiftedFromDate || getLocalDateKey(card.dueDate) || todayKey,
+      rolloverCount: (card.rolloverCount || 0) + 1,
+      dueDate: nextIso,
+    };
+  });
+
+  saveStoredCards(updatedCards);
+  return { updatedCards, postponedCount: excessCards.length };
 };
 
 /**
@@ -269,7 +659,7 @@ export const shiftRemainingTodayCardsToTomorrow = (
       shiftedCount += 1;
       return {
         ...card,
-        shiftedFromDate: todayKey,
+        shiftedFromDate: card.shiftedFromDate || todayKey,
         rolloverCount: (card.rolloverCount || 0) + 1,
         dueDate: tomorrowIso,
       };
@@ -287,6 +677,145 @@ export const shiftRemainingTodayCardsToTomorrow = (
   return { updatedCards, shiftedCount };
 };
 
+export interface FullBackupPayload {
+  version: number;
+  exportedAt: string;
+  settings: UserSettings;
+  streak: StudyStreakState;
+  decks: Deck[];
+  cards: Flashcard[];
+  reviewLogs: ReviewLogEntry[];
+}
+
+export const exportFullBackupJson = async (): Promise<string> => {
+  await initReviewLogStore();
+  const payload: FullBackupPayload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    settings: getUserSettings(),
+    streak: getStudyStreakState(),
+    decks: getStoredDecks(),
+    cards: getStoredCards(),
+    reviewLogs: getReviewLogsSync(),
+  };
+  return JSON.stringify(payload, null, 2);
+};
+
+export const importFullBackupJson = async (
+  rawJson: string
+): Promise<{
+  decks: Deck[];
+  cards: Flashcard[];
+  settings: UserSettings;
+  streak: StudyStreakState;
+  mergedDecksCount: number;
+  mergedCardsCount: number;
+  mergedLogsCount: number;
+}> => {
+  const parsed = JSON.parse(rawJson) as Partial<FullBackupPayload>;
+  if (!parsed || (!Array.isArray(parsed.decks) && !Array.isArray(parsed.cards))) {
+    throw new Error('Invalid SynapseFormula backup JSON file.');
+  }
+
+  const currentDecks = getStoredDecks();
+  const currentCards = getStoredCards();
+  const deckMap = new Map<string, Deck>(currentDecks.map(d => [d.id, d]));
+  const cardMap = new Map<string, Flashcard>(currentCards.map(c => [c.id, c]));
+
+  let mergedDecksCount = 0;
+  for (const incomingDeck of parsed.decks || []) {
+    if (!incomingDeck || !incomingDeck.id || !incomingDeck.name) continue;
+    deckMap.set(incomingDeck.id, incomingDeck);
+    mergedDecksCount += 1;
+  }
+
+  let mergedCardsCount = 0;
+  for (const incomingCard of parsed.cards || []) {
+    if (!incomingCard || !incomingCard.id || !incomingCard.deckId) continue;
+    const normalizedCard: Flashcard = {
+      ...incomingCard,
+      state:
+        incomingCard.state === 'new' ||
+        incomingCard.state === 'learning' ||
+        incomingCard.state === 'review'
+          ? incomingCard.state
+          : 'review',
+    };
+    const existing = cardMap.get(normalizedCard.id);
+    if (!existing) {
+      cardMap.set(normalizedCard.id, normalizedCard);
+      mergedCardsCount += 1;
+    } else {
+      // Keep the card with more recent review timestamp or higher repetitionCount
+      const incomingTime = normalizedCard.lastReviewedAt
+        ? new Date(normalizedCard.lastReviewedAt).getTime()
+        : 0;
+      const existingTime = existing.lastReviewedAt
+        ? new Date(existing.lastReviewedAt).getTime()
+        : 0;
+      if (
+        incomingTime >= existingTime ||
+        (normalizedCard.repetitionCount || 0) >= (existing.repetitionCount || 0)
+      ) {
+        cardMap.set(normalizedCard.id, normalizedCard);
+        mergedCardsCount += 1;
+      }
+    }
+  }
+
+  const finalDecks = Array.from(deckMap.values());
+  const finalCards = Array.from(cardMap.values());
+  saveStoredDecks(finalDecks);
+  saveStoredCards(finalCards);
+
+  const currentSettings = getUserSettings();
+  const finalSettings: UserSettings = parsed.settings
+    ? {
+        ...currentSettings,
+        ...parsed.settings,
+      }
+    : currentSettings;
+  saveUserSettings(finalSettings);
+
+  const currentStreak = getStudyStreakState();
+  const mergedCompleted = Array.from(
+    new Set([
+      ...(currentStreak.completedDates || []),
+      ...(parsed.streak?.completedDates || []),
+    ])
+  ).sort();
+  const finalStreak: StudyStreakState = {
+    currentStreak: calculateConsecutiveStreak(mergedCompleted),
+    bestStreak: Math.max(
+      currentStreak.bestStreak || 0,
+      parsed.streak?.bestStreak || 0,
+      calculateConsecutiveStreak(mergedCompleted)
+    ),
+    completedDates: mergedCompleted,
+    lastStudiedDate: parsed.streak?.lastStudiedDate || currentStreak.lastStudiedDate,
+  };
+  saveStudyStreakState(finalStreak);
+
+  const mergedLogsCount = Array.isArray(parsed.reviewLogs)
+    ? await mergeImportedReviewLogs(parsed.reviewLogs)
+    : 0;
+
+  for (const d of finalDecks) {
+    const dCards = finalCards.filter(c => c.deckId === d.id);
+    syncDeckAndCardsToFirestore(d, dCards).catch(() => {});
+  }
+
+  return {
+    decks: finalDecks,
+    cards: finalCards,
+    settings: finalSettings,
+    streak: finalStreak,
+    mergedDecksCount,
+    mergedCardsCount,
+    mergedLogsCount,
+  };
+};
+
 /**
  * Checks whether 24 hours have elapsed since the last cloud sync.
  */
@@ -302,7 +831,7 @@ export const isSyncDue = (deck: Deck): boolean => {
  */
 function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
   const now = new Date().toISOString();
-  
+
   const deck1Id = 'deck_classical_mechanics';
   const deck2Id = 'deck_electromagnetism';
   const deck3Id = 'deck_quantum_thermo';
@@ -311,7 +840,9 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
     id: deck1Id,
     name: 'Classical Mechanics & Dynamics',
     description: 'Fundamental equations governing motion, energy conservation, gravitation, and harmonic oscillation.',
+    sheetName: 'Sheet1',
     lastSyncedAt: now,
+    createdAt: now,
     syncIntervalHours: 24,
     columnMapping: {
       statementCol: 'Statement',
@@ -319,6 +850,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       variablesCol: 'Variables',
       explanationCol: 'Explanation',
       categoryCol: 'Category',
+      conditionsCol: 'Conditions',
+      derivationCol: 'Derivation',
     },
     cardsCount: 5,
     sessionState: {
@@ -337,7 +870,9 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
     id: deck2Id,
     name: 'Electromagnetism & Fields',
     description: 'Maxwell relations, Lorentz electromagnetic force, and electrostatic potential laws.',
+    sheetName: 'Sheet1',
     lastSyncedAt: now,
+    createdAt: now,
     syncIntervalHours: 24,
     columnMapping: {
       statementCol: 'Statement',
@@ -345,6 +880,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       variablesCol: 'Variables',
       explanationCol: 'Explanation',
       categoryCol: 'Category',
+      conditionsCol: 'Conditions',
+      derivationCol: 'Derivation',
     },
     cardsCount: 4,
   };
@@ -353,7 +890,9 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
     id: deck3Id,
     name: 'Quantum Physics & Thermodynamics',
     description: 'Wave-particle duality, uncertainty principles, entropy, and statistical thermodynamics.',
+    sheetName: 'Sheet1',
     lastSyncedAt: now,
+    createdAt: now,
     syncIntervalHours: 24,
     columnMapping: {
       statementCol: 'Statement',
@@ -361,12 +900,13 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       variablesCol: 'Variables',
       explanationCol: 'Explanation',
       categoryCol: 'Category',
+      conditionsCol: 'Conditions',
+      derivationCol: 'Derivation',
     },
     cardsCount: 4,
   };
 
   const cards: Flashcard[] = [
-    // Classical Mechanics
     {
       id: 'card_cm_1',
       deckId: deck1Id,
@@ -379,6 +919,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
         { symbol: '\\vec{v}', meaning: 'Instantaneous velocity vector', unit: 'm/s' },
         { symbol: '\\vec{B}', meaning: 'Magnetic flux density field', unit: 'T' },
       ],
+      conditions: 'Point charge q in classical or relativistic frame',
+      derivation: 'Combines electrostatic force qE with magnetic cross-product force q(v × B).',
       explanation: 'The magnetic component of the force is strictly perpendicular to both particle velocity and magnetic field, doing zero work on the charge.',
       category: 'Electrodynamics',
       repetitionStage: 'statement',
@@ -386,6 +928,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -399,6 +942,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
         { symbol: 'm_1, m_2', meaning: 'Point masses', unit: 'kg' },
         { symbol: 'r', meaning: 'Separation distance between centers', unit: 'm' },
       ],
+      conditions: 'Point masses or spherically symmetric bodies (r >= R1 + R2)',
+      derivation: 'From Gauss gravitational flux law over a spherical surface of area 4πr².',
       explanation: 'Follows an inverse-square relationship. Halving the separation quadruples the gravitational pull.',
       category: 'Gravitation',
       repetitionStage: 'statement',
@@ -406,18 +951,21 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
       id: 'card_cm_3',
       deckId: deck1Id,
-      statement: '*Kinetic Energy* in terms of relativistic or classical linear momentum:',
+      statement: '*Kinetic Energy* in terms of classical linear momentum:',
       formula: 'E_k = \\frac{p^2}{2m}',
       variables: [
         { symbol: 'E_k', meaning: 'Translational kinetic energy', unit: 'J' },
         { symbol: 'p', meaning: 'Linear momentum (p = mv)', unit: 'kg\\cdot m/s' },
         { symbol: 'm', meaning: 'Inertial mass of the body', unit: 'kg' },
       ],
+      conditions: 'Non-relativistic speeds (v << c)',
+      derivation: 'Substitute v = p / m into E_k = (1/2) m v².',
       explanation: 'Directly relates mechanical kinetic energy to momentum. Crucial for quantum de Broglie substitution.',
       category: 'Mechanics',
       repetitionStage: 'statement',
@@ -425,6 +973,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -437,6 +986,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
         { symbol: 'k', meaning: 'Spring stiffness constant', unit: 'N/m' },
         { symbol: 'm', meaning: 'Oscillating mass', unit: 'kg' },
       ],
+      conditions: 'Ideal massless Hookean spring without damping',
+      derivation: 'From m(d²x/dt²) = -kx => d²x/dt² + (k/m)x = 0.',
       explanation: 'Independent of initial displacement amplitude in the small-strain Hookean limit.',
       category: 'Oscillations',
       repetitionStage: 'statement',
@@ -444,6 +995,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -456,6 +1008,8 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
         { symbol: '\\Delta K', meaning: 'Change in kinetic energy', unit: 'J' },
         { symbol: 'v_f, v_i', meaning: 'Final and initial scalar speeds', unit: 'm/s' },
       ],
+      conditions: 'Rigid body translational motion, inertial reference frame',
+      derivation: 'Integrate F_net dx = m (dv/dt) dx = m v dv from v_i to v_f.',
       explanation: 'Applies whether forces are conservative or non-conservative.',
       category: 'Energy',
       repetitionStage: 'statement',
@@ -463,10 +1017,9 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
-
-    // Electromagnetism
     {
       id: 'card_em_1',
       deckId: deck2Id,
@@ -484,6 +1037,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -503,6 +1057,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -523,6 +1078,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -543,10 +1099,9 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
-
-    // Quantum & Thermo
     {
       id: 'card_qt_1',
       deckId: deck3Id,
@@ -564,6 +1119,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -583,6 +1139,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -602,6 +1159,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
     {
@@ -621,6 +1179,7 @@ function getInitialDemoDecks(): { decks: Deck[]; cards: Flashcard[] } {
       easeFactor: 2.5,
       repetitionCount: 0,
       dueDate: now,
+      createdAt: now,
       state: 'new',
     },
   ];

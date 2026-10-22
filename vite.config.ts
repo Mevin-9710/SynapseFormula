@@ -24,8 +24,8 @@ export default defineConfig(() => {
           short_name: 'Synapse',
           description:
             'Scientific spaced repetition flashcard system for physics and mathematical formulas synced with Google Drive and External MCP.',
-          theme_color: '#f6f7f8',
-          background_color: '#f6f7f8',
+          theme_color: '#f2f4f7',
+          background_color: '#f2f4f7',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -51,7 +51,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,ttf}'],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -81,20 +81,6 @@ export default defineConfig(() => {
                 },
               },
             },
-            {
-              urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/katex.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'katex-cdn-cache',
-                expiration: {
-                  maxEntries: 20,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
           ],
         },
         devOptions: {
@@ -103,16 +89,30 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+              return 'firebase';
+            }
+            if (id.includes('node_modules/katex')) {
+              return 'katex';
+            }
+            if (id.includes('node_modules/xlsx')) {
+              return 'xlsx';
+            }
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

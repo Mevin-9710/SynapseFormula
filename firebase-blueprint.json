@@ -24,6 +24,58 @@
           "minLength": 0,
           "maxLength": 1000
         },
+        "sheetName": {
+          "type": "string",
+          "description": "Worksheet tab name used for Drive sync.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "statementCol": {
+          "type": "string",
+          "description": "Mapped statement column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "formulaCol": {
+          "type": "string",
+          "description": "Mapped formula column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "variablesCol": {
+          "type": "string",
+          "description": "Optional mapped variables column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "explanationCol": {
+          "type": "string",
+          "description": "Optional mapped explanation column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "categoryCol": {
+          "type": "string",
+          "description": "Optional mapped category column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "conditionsCol": {
+          "type": "string",
+          "description": "Optional mapped conditions column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "derivationCol": {
+          "type": "string",
+          "description": "Optional mapped derivation column name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "newCardsPerDayOverride": {
+          "type": "integer",
+          "description": "Optional per-deck daily new card limit override."
+        },
         "cardsCount": {
           "type": "integer",
           "description": "Number of flashcards in this deck."
@@ -64,8 +116,9 @@
         },
         "createdAt": {
           "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when deck was created."
+          "description": "Client ISO timestamp when deck was created.",
+          "minLength": 1,
+          "maxLength": 64
         },
         "updatedAt": {
           "type": "string",
@@ -80,6 +133,8 @@
         "cardsCount",
         "syncIntervalHours",
         "lastSyncedAt",
+        "statementCol",
+        "formulaCol",
         "createdAt",
         "updatedAt"
       ]
@@ -141,7 +196,7 @@
         "state": {
           "type": "string",
           "description": "Card learning maturity state.",
-          "enum": ["new", "learning", "review", "mastered"]
+          "enum": ["new", "learning", "review"]
         },
         "explanation": {
           "type": "string",
@@ -154,6 +209,18 @@
           "description": "Optional topic category.",
           "minLength": 0,
           "maxLength": 200
+        },
+        "conditions": {
+          "type": "string",
+          "description": "Optional validity conditions (e.g. constant acceleration only).",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "derivation": {
+          "type": "string",
+          "description": "Optional derivation steps shown after reveal.",
+          "minLength": 0,
+          "maxLength": 2000
         },
         "lastReviewedAt": {
           "type": "string",
@@ -177,6 +244,18 @@
           "type": "integer",
           "description": "Optional count of automatic daily rollovers."
         },
+        "lapses": {
+          "type": "integer",
+          "description": "Optional count of mature card lapses."
+        },
+        "consecutiveGoods": {
+          "type": "integer",
+          "description": "Optional count of consecutive Good/Easy reviews."
+        },
+        "suspended": {
+          "type": "boolean",
+          "description": "Whether the card is suspended from due queues."
+        },
         "variableSymbols": {
           "type": "array",
           "description": "Bounded list of variable LaTeX symbols (max 20)."
@@ -191,8 +270,9 @@
         },
         "createdAt": {
           "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when card was created."
+          "description": "Client ISO timestamp when card was created.",
+          "minLength": 1,
+          "maxLength": 64
         },
         "updatedAt": {
           "type": "string",
@@ -247,8 +327,9 @@
         },
         "createdAt": {
           "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when streak record was created."
+          "description": "Client ISO timestamp when streak record was created.",
+          "minLength": 1,
+          "maxLength": 64
         },
         "updatedAt": {
           "type": "string",
