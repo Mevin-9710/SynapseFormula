@@ -436,7 +436,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
 
                   {/* MCP Client Config Snippet */}
                   <div className="space-y-2">
-                    <pre className="p-3 rounded-xl bg-black text-emerald-300 text-xs overflow-x-auto font-mono leading-relaxed">
+                    <pre className="p-3 rounded-xl bg-black text-white text-xs overflow-x-auto font-mono leading-relaxed">
                       {mcpConfigJson}
                     </pre>
                     <button

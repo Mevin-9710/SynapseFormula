@@ -90,8 +90,8 @@ export const FormulaDisplay: React.FC<FormulaDisplayProps> = ({
     const el = scrollRef.current;
     if (!el) return;
     const checkOverflow = () => {
-      const isOverflowing = el.scrollWidth - el.clientWidth > 4;
-      const isAtEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+      const isOverflowing = el.scrollWidth - el.clientWidth > 12;
+      const isAtEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 8;
       setHasRightOverflow(isOverflowing && !isAtEnd);
     };
     checkOverflow();
@@ -107,7 +107,7 @@ export const FormulaDisplay: React.FC<FormulaDisplayProps> = ({
     if (!displayMode) {
       return (
         <span
-          className={`inline-block max-w-full overflow-x-auto align-middle select-all ${sizeClasses[size]} ${className}`}
+          className={`inline-block max-w-full align-middle select-all ${sizeClasses[size]} ${className}`}
           dangerouslySetInnerHTML={{ __html: renderedHtml }}
         />
       );
@@ -123,7 +123,7 @@ export const FormulaDisplay: React.FC<FormulaDisplayProps> = ({
         {hasRightOverflow && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute top-0 right-0 bottom-0 w-7 bg-gradient-to-l from-white/95 dark:from-zinc-900/95 to-transparent"
+            className="pointer-events-none absolute top-0 right-0 bottom-0 w-6 bg-gradient-to-l from-white dark:from-[#1a1d24] to-transparent"
           />
         )}
       </div>

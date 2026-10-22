@@ -203,7 +203,7 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
                           {stable && (
                             <>
                               <span>·</span>
-                              <span className="inline-flex items-center gap-1 font-bold text-emerald-700 dark:text-emerald-400">
+                              <span className="inline-flex items-center gap-1 font-bold text-black dark:text-white">
                                 <ShieldCheck className="w-3.5 h-3.5" />
                                 Stable
                               </span>
@@ -212,7 +212,7 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
                           {leech && (
                             <>
                               <span>·</span>
-                              <span className="inline-flex items-center gap-1 font-bold text-amber-700 dark:text-amber-400">
+                              <span className="inline-flex items-center gap-1 font-bold text-black dark:text-white underline underline-offset-2">
                                 <AlertTriangle className="w-3.5 h-3.5" />
                                 Leech ({card.lapses})
                               </span>

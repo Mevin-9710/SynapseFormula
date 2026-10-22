@@ -11,32 +11,29 @@
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   color-scheme: light;
 
-  /* Light Mode Monochrome Glass Variables (Default) */
-  --bg-base: #f4f5f8;
-  --blob-1: rgba(255, 255, 255, 0.96);
-  --blob-2: rgba(220, 226, 236, 0.7);
-  --blob-3: rgba(232, 235, 242, 0.8);
+  /* Light Mode Monochrome Surfaces (Default) — Clean uniform colors with zero gradient overlay banding */
+  --bg-base: #f5f6f8;
 
   --text-primary: #0f1115;
   --text-secondary: rgba(15, 17, 21, 0.78);
   --text-muted: rgba(15, 17, 21, 0.72);
 
-  /* Opaque fallback & reduced-transparency surfaces */
-  --chrome-bg-opaque: rgba(250, 251, 253, 0.97);
-  --chrome-bg-blur: rgba(250, 251, 253, 0.85);
+  /* Chrome surfaces (sticky navbar, bottom nav, bottom sheets, rating bar) */
+  --chrome-bg-opaque: #ffffff;
+  --chrome-bg-blur: rgba(255, 255, 255, 0.95);
   --chrome-border: rgba(15, 17, 21, 0.11);
 
-  /* Fake-glass card surfaces (NO backdrop-filter for 60fps scrolling) */
-  --card-bg: rgba(255, 255, 255, 0.82);
-  --card-bg-elevated: rgba(255, 255, 255, 0.94);
+  /* Card surfaces (NO backdrop-filter for 60fps scrolling, crisp solid white to prevent background bleed) */
+  --card-bg: #ffffff;
+  --card-bg-elevated: #ffffff;
   --card-border: rgba(15, 17, 21, 0.11);
-  --card-highlight: rgba(255, 255, 255, 0.9);
-  --card-shadow: 0 2px 10px -2px rgba(15, 17, 21, 0.06);
+  --card-highlight: rgba(255, 255, 255, 1);
+  --card-shadow: 0 2px 8px -2px rgba(15, 17, 21, 0.05);
 
-  /* Interactive buttons */
-  --btn-bg: rgba(15, 17, 21, 0.06);
-  --btn-bg-active: rgba(15, 17, 21, 0.13);
-  --btn-border: rgba(15, 17, 21, 0.14);
+  /* Interactive buttons — uniform solid monochrome fill (no two-tone bleed) */
+  --btn-bg: #eef0f4;
+  --btn-bg-active: #e2e5ec;
+  --btn-border: rgba(15, 17, 21, 0.13);
   --btn-primary-bg: #0f1115;
   --btn-primary-text: #ffffff;
   --btn-primary-active: #272a30;
@@ -46,55 +43,52 @@ html.dark {
   color-scheme: dark;
 
   --bg-base: #0d0f12;
-  --blob-1: rgba(38, 43, 54, 0.55);
-  --blob-2: rgba(24, 28, 36, 0.65);
-  --blob-3: rgba(32, 36, 46, 0.5);
 
   --text-primary: #f5f7fa;
   --text-secondary: rgba(245, 247, 250, 0.82);
   --text-muted: rgba(245, 247, 250, 0.74);
 
-  --chrome-bg-opaque: rgba(18, 20, 25, 0.97);
-  --chrome-bg-blur: rgba(18, 20, 25, 0.82);
+  --chrome-bg-opaque: #12151b;
+  --chrome-bg-blur: rgba(18, 21, 27, 0.95);
   --chrome-border: rgba(255, 255, 255, 0.13);
 
-  --card-bg: rgba(26, 29, 36, 0.76);
-  --card-bg-elevated: rgba(32, 36, 44, 0.88);
+  --card-bg: #161920;
+  --card-bg-elevated: #1a1d24;
   --card-border: rgba(255, 255, 255, 0.12);
-  --card-highlight: rgba(255, 255, 255, 0.07);
-  --card-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35);
+  --card-highlight: rgba(255, 255, 255, 0.05);
+  --card-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.4);
 
-  --btn-bg: rgba(255, 255, 255, 0.07);
-  --btn-bg-active: rgba(255, 255, 255, 0.15);
-  --btn-border: rgba(255, 255, 255, 0.16);
+  --btn-bg: #222630;
+  --btn-bg-active: #2d323f;
+  --btn-border: rgba(255, 255, 255, 0.15);
   --btn-primary-bg: #f5f7fa;
   --btn-primary-text: #0d0f12;
   --btn-primary-active: #dce0e8;
 }
 
 /*
- * Mobile Scroll Fix:
- * Do NOT set overflow-x: hidden on both html and body (causes dual scroll container lock on iOS/Android).
- * Use overflow-x: clip on body only and allow natural vertical pan-y + pinch-zoom.
+ * Mobile Scroll & Viewport Setup:
+ * Do NOT set overflow-y: auto on both html and body (which creates a nested scroll container
+ * and draws a gray scrollbar overlay along the right/bottom edges on mobile browsers).
+ * Let the root document scroll naturally.
  */
 html {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
+  background-color: var(--bg-base);
   color: var(--text-primary);
-  min-height: 100%;
-  overflow-y: auto;
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
+  background-color: var(--bg-base);
   color: var(--text-primary);
   min-height: 100dvh;
+  margin: 0;
   overflow-x: clip;
-  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-y pinch-zoom;
 }
 
 #root {
@@ -124,13 +118,10 @@ textarea {
   font-size: 16px !important;
 }
 
-/* Subtle monochrome gradient with soft light blobs so glass reads as glass (no background-attachment:fixed which locks mobile scroll) */
+/* Clean uniform monochrome canvas background (no radial-gradient blobs that cause color banding/overlays on mobile GPUs) */
 .mobile-canvas-bg {
   background-color: var(--bg-base);
-  background-image:
-    radial-gradient(circle at 15% 12%, var(--blob-1) 0%, transparent 52%),
-    radial-gradient(circle at 85% 28%, var(--blob-2) 0%, transparent 48%),
-    radial-gradient(circle at 50% 85%, var(--blob-3) 0%, transparent 55%);
+  background-image: none;
   color: var(--text-primary);
 }
 
@@ -180,7 +171,7 @@ html.reduce-effects .glass-panel {
 /*
  * FAKE GLASS FOR SCROLLING LISTS & CARDS (5.20):
  * Deck rows and cards inside scrolling lists MUST NOT use backdrop-filter!
- * Translucent fill, 1px light border, soft inner highlight, subtle shadow.
+ * Crisp monochrome surface, 1px light border, subtle shadow.
  */
 .glass-panel {
   background-color: var(--card-bg);
@@ -227,12 +218,18 @@ html.reduce-effects .glass-panel {
   color: var(--text-muted);
 }
 
-/* KaTeX responsive scaling & fade hint fallback (5.11) */
+/* KaTeX responsive scaling & hidden scrollbars so inline/display math never gets gray scrollbar boxes overlaid */
 .katex-display {
   margin: 0.25em 0 !important;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.katex-display::-webkit-scrollbar {
+  display: none;
 }
 
 .formula-clamp-lg {
@@ -251,7 +248,14 @@ html.reduce-effects .glass-panel {
   position: relative;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.formula-scroll-fade::-webkit-scrollbar {
+  display: none;
 }
 
 /* Safe area padding for mobile notches & home indicator (5.18: fallback is 0px, not 16px) */
