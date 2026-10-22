@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -32,8 +33,47 @@ async function startServer() {
         middlewareMode: true,
         hmr: false,
       },
-      appType: 'spa',
+      appType: 'custom',
     });
+
+    // Provide a dummy @vite/client that never creates WebSocket connections
+    app.get('/@vite/client', (_req, res) => {
+      res.setHeader('Content-Type', 'application/javascript');
+      res.send(
+        '// HMR disabled in sandboxed Cloud Run environment\n' +
+        'export function createHotContext() { return { accept() {}, dispose() {}, prune() {}, data: {}, on() {}, off() {}, send() {} }; }\n' +
+        'export const updateStyle = () => {};\n' +
+        'export const removeStyle = () => {};\n'
+      );
+    });
+
+    // Serve transformed index.html with @vite/client stripped
+    app.use(async (req, res, next) => {
+      const url = req.originalUrl || req.url;
+      const isHtmlReq =
+        req.method === 'GET' &&
+        !url.startsWith('/api') &&
+        !url.startsWith('/@') &&
+        !url.startsWith('/src') &&
+        !url.startsWith('/node_modules') &&
+        (req.headers.accept?.includes('text/html') || url === '/' || url.endsWith('.html') || !path.extname(url));
+
+      if (!isHtmlReq) {
+        return next();
+      }
+
+      try {
+        const indexPath = path.resolve(__dirname, 'index.html');
+        let html = fs.readFileSync(indexPath, 'utf-8');
+        html = await vite.transformIndexHtml(url, html);
+        html = html.replace(/<script\s+type="module"\s+src="\/@vite\/client"><\/script>/gi, '');
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');

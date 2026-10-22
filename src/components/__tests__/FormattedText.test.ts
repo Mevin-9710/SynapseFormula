@@ -22,18 +22,36 @@ describe('parseFormattedText', () => {
     ]);
   });
 
-  it('parses LaTeX vectors and symbols with and without dollar delimiters', () => {
-    const tokensWithDollars = parseFormattedText('Particle with charge $q$ and velocity $\\vec{v}$');
-    expect(tokensWithDollars).toEqual([
-      { type: 'text', content: 'Particle with charge ' },
-      { type: 'inlineMath', content: 'q' },
-      { type: 'text', content: ' and velocity ' },
-      { type: 'inlineMath', content: '\\vec{v}' },
-    ]);
+  it('parses screenshot 1 question with reduced mass and relative separation speed', () => {
+    const q = 'energy, the energy equates that of the *reduced mass* \\mu moving at the *relative separation speed* v_{\\text{rel}}.';
+    const tokens = parseFormattedText(q);
+    
+    // Check that *reduced mass* is italic
+    expect(tokens.some(t => t.type === 'italic' && t.content === 'reduced mass')).toBe(true);
+    // Check that \mu is math
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content === '\\mu')).toBe(true);
+    // Check that *relative separation speed* is italic
+    expect(tokens.some(t => t.type === 'italic' && t.content === 'relative separation speed')).toBe(true);
+    // Check that v_{\text{rel}} is math
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content.includes('v_{\\text{rel}}'))).toBe(true);
+  });
 
-    const tokensWithoutDollars = parseFormattedText('Given \\vec{F} and frequency \\omega');
-    expect(tokensWithoutDollars.some(t => t.type === 'inlineMath' && t.content === '\\vec{F}')).toBe(true);
-    expect(tokensWithoutDollars.some(t => t.type === 'inlineMath' && t.content === '\\omega')).toBe(true);
+  it('parses screenshot 2 derivation with equations, subscripts, and fractions', () => {
+    const deriv = 'From m1 v1 = m2 v2 = p, v_{\\text{rel}} = v1 + v2 = p/\\mu and K = p^2/(2m1) + p^2/(2m2) = p^2/(2\\mu) = \\frac{1}{2} \\mu v_{\\text{rel}}^2.';
+    const tokens = parseFormattedText(deriv);
+
+    // v_{\text{rel}} = v1 + v2 = p/\mu must be parsed as math
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content.includes('v_{\\text{rel}}'))).toBe(true);
+    // K = ... = \frac{1}{2} \mu v_{\text{rel}}^2 must be parsed as math
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content.includes('\\frac{1}{2}'))).toBe(true);
+  });
+
+  it('parses variables with subscripts and superscripts', () => {
+    const tokens = parseFormattedText('Let v_{\\text{rel}} and v_{\\text{rel}}^2 be given with m_1 and p^2');
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content === 'v_{\\text{rel}}')).toBe(true);
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content === 'v_{\\text{rel}}^2')).toBe(true);
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content === 'm_1')).toBe(true);
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content === 'p^2')).toBe(true);
   });
 
   it('parses bold text and code', () => {

@@ -17,11 +17,14 @@ export interface TextToken {
  * Tokenizes text containing:
  * - Block math: $$...$$ or \[...\]
  * - Inline math: $...$ or \(...\)
- * - Markdown bold: **...** or __...__
- * - Markdown italic: *...* or _..._
+ * - Markdown bold: **...**
+ * - Markdown italic: *...*
  * - Markdown code: `...`
- * - Standalone LaTeX math macros: \vec{...}, \frac{...}{...}, \omega, \hbar, etc.
- * - Newline characters
+ * - Math equations with '=' containing symbols: e.g. v_{\text{rel}} = v1 + v2 = p/\mu
+ * - Variables with subscripts/superscripts: v_{\text{rel}}, v_{\text{rel}}^2, m_1, p^2, etc.
+ * - Standalone LaTeX commands: \mu, \frac{1}{2}, \vec{F}, \hbar, \omega, etc.
+ * - Fractions/quotients: p/\mu, p^2/(2\mu)
+ * - Newlines
  */
 export function parseFormattedText(text: string): TextToken[] {
   if (!text) return [];
@@ -35,9 +38,9 @@ export function parseFormattedText(text: string): TextToken[] {
     return [{ type: 'blockMath', content: trimmed.slice(2, -2).trim() }];
   }
 
-  // Regex matching block math, inline math, bold, italic, code, standalone LaTeX commands, and newlines
+  // Regex matching all math forms, markdown tokens, and equations
   const tokenRegex =
-    /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^\$\n]+?\$|\\\([\s\S]+?\\\)|\*\*[^*]+?\*\*|__[^_]+?__|\*[^*]+?\*|_[^_]+?_|`[^`]+?`|\\(?:vec|mathbf|boldsymbol|frac|sqrt|hbar|alpha|beta|gamma|delta|theta|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|epsilon|varepsilon|partial|nabla|infty|oint|sum|prod|int|times|cdot|approx|pm|mp|le|ge|neq|equiv|sim|propto|rightarrow|to)\b(?:\{[^{}]*\}|[a-zA-Z0-9_\^\+\-\*\/])*(?:\s*=\s*[a-zA-Z0-9_\\\^\+\-\*\/\{\}]+)?|\n)/g;
+    /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^\$\n]+?\$|\\\([\s\S]+?\\\)|\*\*[^*]+?\*\*|\*[^*]+?\*|`[^`]+?`|(?:\b[a-zA-Z0-9_\^\{\}\\]+(?:_\{(?:[^{}]*|\{[^{}]*\})*\}|_[a-zA-Z0-9]+|\^\{(?:[^{}]*|\{[^{}]*\})*\}|\^[a-zA-Z0-9]+)?\s*=\s*[a-zA-Z0-9_\\\^\{\}\+\-\*\/\(\)\s=]+)|[a-zA-Z\\]+(?:_\{(?:[^{}]*|\{[^{}]*\})*\}|_[a-zA-Z0-9]+|\^\{(?:[^{}]*|\{[^{}]*\})*\}|\^[a-zA-Z0-9]+)+|\\[a-zA-Z]+(?:\{(?:[^{}]*|\{[^{}]*\})*\})*(?:_\{(?:[^{}]*|\{[^{}]*\})*\}|_[a-zA-Z0-9]+|\^\{(?:[^{}]*|\{[^{}]*\})*\}|\^[a-zA-Z0-9]+)*|[a-zA-Z0-9_\^\{\}\\]+\/[a-zA-Z0-9_\^\{\}\\\(\)]+|\n)/g;
 
   let lastIndex = 0;
   const tokens: TextToken[] = [];
@@ -61,15 +64,12 @@ export function parseFormattedText(text: string): TextToken[] {
       tokens.push({ type: 'inlineMath', content: raw.slice(2, -2).trim() });
     } else if (raw.startsWith('**') && raw.endsWith('**')) {
       tokens.push({ type: 'bold', content: raw.slice(2, -2) });
-    } else if (raw.startsWith('__') && raw.endsWith('__')) {
-      tokens.push({ type: 'bold', content: raw.slice(2, -2) });
     } else if (raw.startsWith('*') && raw.endsWith('*')) {
-      tokens.push({ type: 'italic', content: raw.slice(1, -1) });
-    } else if (raw.startsWith('_') && raw.endsWith('_')) {
       tokens.push({ type: 'italic', content: raw.slice(1, -1) });
     } else if (raw.startsWith('`') && raw.endsWith('`')) {
       tokens.push({ type: 'code', content: raw.slice(1, -1) });
-    } else if (raw.startsWith('\\')) {
+    } else {
+      // It's a LaTeX macro, variable with subscript/superscript (e.g. v_{\text{rel}}), or math equation
       tokens.push({ type: 'inlineMath', content: raw.trim() });
     }
 
@@ -86,7 +86,7 @@ export function parseFormattedText(text: string): TextToken[] {
 /**
  * Universal text formatter for flashcard questions (statements), explanations, conditions, and derivations.
  * Formats:
- * - LaTeX math: inline $...$, block $$...$$, and raw macros (\vec{F}, \frac{a}{b}, \hbar, \omega, etc.)
+ * - LaTeX math: inline $...$, block $$...$$, subscripts (v_{\text{rel}}, m_1), powers (p^2), greek (\mu), fractions
  * - Markdown: *italic*, **bold**, `code`
  */
 export const FormattedText: React.FC<FormattedTextProps> = ({
@@ -115,14 +115,31 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
             );
           }
           case 'inlineMath': {
-            const html = renderLatexCached(token.content, false);
-            if (!html) return <span key={idx}>{token.content}</span>;
+            // Strip trailing period or comma if accidentally captured at boundary
+            let mathExpr = token.content;
+            let trailingPunct = '';
+            if (mathExpr.endsWith('.') || mathExpr.endsWith(',')) {
+              trailingPunct = mathExpr.slice(-1);
+              mathExpr = mathExpr.slice(0, -1);
+            }
+
+            const html = renderLatexCached(mathExpr, false);
+            if (!html) {
+              return (
+                <span key={idx}>
+                  {token.content}
+                  {trailingPunct}
+                </span>
+              );
+            }
             return (
-              <span
-                key={idx}
-                className={`inline-block align-baseline px-0.5 ${inlineMathClassName}`}
-                dangerouslySetInnerHTML={{ __html: html }}
-              />
+              <React.Fragment key={idx}>
+                <span
+                  className={`inline-block align-baseline px-0.5 ${inlineMathClassName}`}
+                  dangerouslySetInnerHTML={{ __html: html }}
+                />
+                {trailingPunct}
+              </React.Fragment>
             );
           }
           case 'bold': {
