@@ -276,8 +276,8 @@ export const calculateNextReview = (
         state = 'review';
         break;
       case 'easy':
-        // Small bump: 1.3x of Good, never above cap
-        intervalDays = Math.min(cap, Math.max(goodCapped, Math.round(rawGood * 1.3)));
+        // Standard Anki graduation on Easy: 4 days (bounded by effective maxIntervalDays cap)
+        intervalDays = Math.min(cap, 4);
         easeFactor = Math.min(3.0, easeFactor + 0.15);
         repetitionCount = 1;
         consecutiveGoods += 1;
@@ -312,8 +312,8 @@ export const calculateNextReview = (
         state = 'review';
         break;
       case 'easy':
-        // Easy is a small bump: x1.3 of Good, but never above the cap
-        intervalDays = Math.min(cap, Math.max(goodInterval, Math.round(goodInterval * 1.3)));
+        // Easy is a bump over Good (x1.3, at least +1 day), never above the cap
+        intervalDays = Math.min(cap, Math.max(goodInterval + 1, Math.round(goodInterval * 1.3)));
         easeFactor = Math.min(3.0, easeFactor + 0.15);
         repetitionCount += 1;
         consecutiveGoods += 1;

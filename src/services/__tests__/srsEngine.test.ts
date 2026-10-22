@@ -64,7 +64,8 @@ describe('srsEngine - ratings, caps, lapses, exam mode, and rollover', () => {
     expect(good.nextConsecutiveGoods).toBe(1);
 
     const easy = calculateNextReview(card, 'easy');
-    expect(easy.nextIntervalDays).toBeLessThanOrEqual(4);
+    expect(easy.nextIntervalDays).toBe(4);
+    expect(easy.readableNextInterval).toBe('4d');
     expect(easy.nextState).toBe('review');
     expect(easy.nextRepetitionCount).toBe(1);
   });
