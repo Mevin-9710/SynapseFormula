@@ -70,4 +70,12 @@ describe('parseFormattedText', () => {
       { type: 'text', content: 'Newton Second Law' },
     ]);
   });
+
+  it('parses AI response with formulas and bold headers', () => {
+    const aiText = '### Analysis for circled part: `v_{\\text{rel}}`\n\n- **Physical Meaning**: Magnitude of relative velocity between fragments\n- **Governing Formula**: $K = \\frac{1}{2} \\mu v_{\\text{rel}}^2$\n\nNotice that $\\mu$ is the reduced mass.';
+    const tokens = parseFormattedText(aiText);
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content.includes('\\frac{1}{2}'))).toBe(true);
+    expect(tokens.some(t => t.type === 'inlineMath' && t.content.includes('\\mu'))).toBe(true);
+    expect(tokens.some(t => t.type === 'bold')).toBe(true);
+  });
 });

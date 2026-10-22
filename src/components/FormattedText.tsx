@@ -84,10 +84,8 @@ export function parseFormattedText(text: string): TextToken[] {
 }
 
 /**
- * Universal text formatter for flashcard questions (statements), explanations, conditions, and derivations.
- * Formats:
- * - LaTeX math: inline $...$, block $$...$$, subscripts (v_{\text{rel}}, m_1), powers (p^2), greek (\mu), fractions
- * - Markdown: *italic*, **bold**, `code`
+ * Universal text and LaTeX math formatter.
+ * Handles AI output, markdown headers, lists, code, and KaTeX mathematical formulas.
  */
 export const FormattedText: React.FC<FormattedTextProps> = ({
   text,
@@ -95,9 +93,84 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
   as: Component = 'span',
   inlineMathClassName = '',
 }) => {
-  const tokens = useMemo(() => parseFormattedText(text), [text]);
-
   if (!text) return null;
+
+  // Split lines to properly support AI markdown headers (### ), bullet lists (- ), and block quotes
+  const lines = useMemo(() => text.split('\n'), [text]);
+
+  // If text is a single line, format directly for high performance
+  if (lines.length <= 1) {
+    return <FormattedLine text={text} Component={Component} className={className} inlineMathClassName={inlineMathClassName} />;
+  }
+
+  return (
+    <div className={`space-y-1.5 ${className}`}>
+      {lines.map((line, lineIdx) => {
+        const trimmedLine = line.trim();
+        if (!trimmedLine) {
+          return <div key={lineIdx} className="h-1.5" />;
+        }
+
+        // Markdown Header 3: ### Heading
+        if (trimmedLine.startsWith('### ')) {
+          return (
+            <div key={lineIdx} className="font-bold text-[15px] pt-1.5 pb-0.5 text-foreground flex items-center gap-1.5">
+              <FormattedLine text={trimmedLine.slice(4)} inlineMathClassName={inlineMathClassName} />
+            </div>
+          );
+        }
+
+        // Markdown Header 2: ## Heading
+        if (trimmedLine.startsWith('## ')) {
+          return (
+            <div key={lineIdx} className="font-bold text-[16px] pt-2 pb-0.5 text-foreground">
+              <FormattedLine text={trimmedLine.slice(3)} inlineMathClassName={inlineMathClassName} />
+            </div>
+          );
+        }
+
+        // Bullet Point: - item or * item
+        if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
+          return (
+            <div key={lineIdx} className="flex items-start gap-2 pl-1 text-[14px] leading-relaxed">
+              <span className="text-blue-500 font-bold shrink-0 mt-0.5">•</span>
+              <div className="flex-1 min-w-0">
+                <FormattedLine text={trimmedLine.slice(2)} inlineMathClassName={inlineMathClassName} />
+              </div>
+            </div>
+          );
+        }
+
+        // Numbered List: 1. item
+        const numMatch = trimmedLine.match(/^(\d+)\.\s+(.*)$/);
+        if (numMatch) {
+          return (
+            <div key={lineIdx} className="flex items-start gap-2 pl-1 text-[14px] leading-relaxed">
+              <span className="font-mono text-xs font-bold text-blue-500 shrink-0 mt-1">{numMatch[1]}.</span>
+              <div className="flex-1 min-w-0">
+                <FormattedLine text={numMatch[2]} inlineMathClassName={inlineMathClassName} />
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div key={lineIdx} className="leading-relaxed">
+            <FormattedLine text={line} inlineMathClassName={inlineMathClassName} />
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const FormattedLine: React.FC<{
+  text: string;
+  Component?: any;
+  className?: string;
+  inlineMathClassName?: string;
+}> = ({ text, Component = 'span', className = '', inlineMathClassName = '' }) => {
+  const tokens = useMemo(() => parseFormattedText(text), [text]);
 
   return (
     <Component className={className}>
@@ -115,7 +188,6 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
             );
           }
           case 'inlineMath': {
-            // Strip trailing period or comma if accidentally captured at boundary
             let mathExpr = token.content;
             let trailingPunct = '';
             if (mathExpr.endsWith('.') || mathExpr.endsWith(',')) {
@@ -148,9 +220,9 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
               token.content.includes('\\') ||
               token.content.includes('*');
             return (
-              <strong key={idx} className="font-bold">
+              <strong key={idx} className="font-bold text-foreground">
                 {hasNested ? (
-                  <FormattedText text={token.content} inlineMathClassName={inlineMathClassName} />
+                  <FormattedLine text={token.content} inlineMathClassName={inlineMathClassName} />
                 ) : (
                   token.content
                 )}
@@ -165,7 +237,7 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
             return (
               <em key={idx} className="font-serif italic font-semibold px-0.5">
                 {hasNested ? (
-                  <FormattedText text={token.content} inlineMathClassName={inlineMathClassName} />
+                  <FormattedLine text={token.content} inlineMathClassName={inlineMathClassName} />
                 ) : (
                   token.content
                 )}
@@ -191,3 +263,4 @@ export const FormattedText: React.FC<FormattedTextProps> = ({
     </Component>
   );
 };
+export default FormattedText;
