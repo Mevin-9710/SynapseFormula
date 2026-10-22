@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -7,77 +9,98 @@
 
 :root {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color-scheme: light dark;
+  color-scheme: light;
 
-  /* Light Mode Monochrome Glass Variables */
-  --bg-base: #f2f4f7;
-  --blob-1: rgba(255, 255, 255, 0.95);
-  --blob-2: rgba(218, 224, 235, 0.65);
-  --blob-3: rgba(229, 231, 235, 0.75);
+  /* Light Mode Monochrome Glass Variables (Default) */
+  --bg-base: #f4f5f8;
+  --blob-1: rgba(255, 255, 255, 0.96);
+  --blob-2: rgba(220, 226, 236, 0.7);
+  --blob-3: rgba(232, 235, 242, 0.8);
 
   --text-primary: #0f1115;
-  --text-secondary: rgba(15, 17, 21, 0.76);
+  --text-secondary: rgba(15, 17, 21, 0.78);
   --text-muted: rgba(15, 17, 21, 0.72);
 
   /* Opaque fallback & reduced-transparency surfaces */
-  --chrome-bg-opaque: rgba(250, 251, 252, 0.97);
-  --chrome-bg-blur: rgba(250, 251, 252, 0.82);
+  --chrome-bg-opaque: rgba(250, 251, 253, 0.97);
+  --chrome-bg-blur: rgba(250, 251, 253, 0.85);
   --chrome-border: rgba(15, 17, 21, 0.11);
 
   /* Fake-glass card surfaces (NO backdrop-filter for 60fps scrolling) */
-  --card-bg: rgba(255, 255, 255, 0.76);
-  --card-bg-elevated: rgba(255, 255, 255, 0.88);
+  --card-bg: rgba(255, 255, 255, 0.82);
+  --card-bg-elevated: rgba(255, 255, 255, 0.94);
   --card-border: rgba(15, 17, 21, 0.11);
-  --card-highlight: rgba(255, 255, 255, 0.85);
-  --card-shadow: 0 2px 10px -2px rgba(15, 17, 21, 0.05);
+  --card-highlight: rgba(255, 255, 255, 0.9);
+  --card-shadow: 0 2px 10px -2px rgba(15, 17, 21, 0.06);
 
   /* Interactive buttons */
-  --btn-bg: rgba(15, 17, 21, 0.055);
-  --btn-bg-active: rgba(15, 17, 21, 0.12);
+  --btn-bg: rgba(15, 17, 21, 0.06);
+  --btn-bg-active: rgba(15, 17, 21, 0.13);
   --btn-border: rgba(15, 17, 21, 0.14);
   --btn-primary-bg: #0f1115;
   --btn-primary-text: #ffffff;
   --btn-primary-active: #272a30;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-base: #0d0f12;
-    --blob-1: rgba(38, 43, 54, 0.55);
-    --blob-2: rgba(24, 28, 36, 0.65);
-    --blob-3: rgba(32, 36, 46, 0.5);
+html.dark {
+  color-scheme: dark;
 
-    --text-primary: #f5f7fa;
-    --text-secondary: rgba(245, 247, 250, 0.82);
-    --text-muted: rgba(245, 247, 250, 0.74);
+  --bg-base: #0d0f12;
+  --blob-1: rgba(38, 43, 54, 0.55);
+  --blob-2: rgba(24, 28, 36, 0.65);
+  --blob-3: rgba(32, 36, 46, 0.5);
 
-    --chrome-bg-opaque: rgba(18, 20, 25, 0.97);
-    --chrome-bg-blur: rgba(18, 20, 25, 0.82);
-    --chrome-border: rgba(255, 255, 255, 0.13);
+  --text-primary: #f5f7fa;
+  --text-secondary: rgba(245, 247, 250, 0.82);
+  --text-muted: rgba(245, 247, 250, 0.74);
 
-    --card-bg: rgba(26, 29, 36, 0.76);
-    --card-bg-elevated: rgba(32, 36, 44, 0.88);
-    --card-border: rgba(255, 255, 255, 0.12);
-    --card-highlight: rgba(255, 255, 255, 0.07);
-    --card-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35);
+  --chrome-bg-opaque: rgba(18, 20, 25, 0.97);
+  --chrome-bg-blur: rgba(18, 20, 25, 0.82);
+  --chrome-border: rgba(255, 255, 255, 0.13);
 
-    --btn-bg: rgba(255, 255, 255, 0.07);
-    --btn-bg-active: rgba(255, 255, 255, 0.15);
-    --btn-border: rgba(255, 255, 255, 0.16);
-    --btn-primary-bg: #f5f7fa;
-    --btn-primary-text: #0d0f12;
-    --btn-primary-active: #dce0e8;
-  }
+  --card-bg: rgba(26, 29, 36, 0.76);
+  --card-bg-elevated: rgba(32, 36, 44, 0.88);
+  --card-border: rgba(255, 255, 255, 0.12);
+  --card-highlight: rgba(255, 255, 255, 0.07);
+  --card-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35);
+
+  --btn-bg: rgba(255, 255, 255, 0.07);
+  --btn-bg-active: rgba(255, 255, 255, 0.15);
+  --btn-border: rgba(255, 255, 255, 0.16);
+  --btn-primary-bg: #f5f7fa;
+  --btn-primary-text: #0d0f12;
+  --btn-primary-active: #dce0e8;
 }
 
-html,
+/*
+ * Mobile Scroll Fix:
+ * Do NOT set overflow-x: hidden on both html and body (causes dual scroll container lock on iOS/Android).
+ * Use overflow-x: clip on body only and allow natural vertical pan-y + pinch-zoom.
+ */
+html {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 15px;
+  color: var(--text-primary);
+  min-height: 100%;
+  overflow-y: auto;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
   color: var(--text-primary);
-  touch-action: manipulation;
-  overflow-x: hidden;
-  -webkit-text-size-adjust: 100%;
+  min-height: 100dvh;
+  overflow-x: clip;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y pinch-zoom;
+}
+
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
 }
 
 * {
@@ -101,14 +124,13 @@ textarea {
   font-size: 16px !important;
 }
 
-/* Fixed subtle monochrome gradient with soft light blobs so glass reads as glass (5.20) */
+/* Subtle monochrome gradient with soft light blobs so glass reads as glass (no background-attachment:fixed which locks mobile scroll) */
 .mobile-canvas-bg {
   background-color: var(--bg-base);
   background-image:
     radial-gradient(circle at 15% 12%, var(--blob-1) 0%, transparent 52%),
     radial-gradient(circle at 85% 28%, var(--blob-2) 0%, transparent 48%),
     radial-gradient(circle at 50% 85%, var(--blob-3) 0%, transparent 55%);
-  background-attachment: fixed;
   color: var(--text-primary);
 }
 
@@ -208,6 +230,9 @@ html.reduce-effects .glass-panel {
 /* KaTeX responsive scaling & fade hint fallback (5.11) */
 .katex-display {
   margin: 0.25em 0 !important;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .formula-clamp-lg {
@@ -250,20 +275,18 @@ html.reduce-effects .glass-panel {
   overscroll-behavior-y: contain;
 }
 
-/* Short page transition animation, disabled under prefers-reduced-motion (5.20) */
+/* Short page transition animation: opacity only so no residual CSS transform breaks fixed children or mobile scroll */
 @keyframes pageRestoreEnter {
   0% {
     opacity: 0;
-    transform: translateY(6px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
 .page-restore-enter {
-  animation: pageRestoreEnter 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: pageRestoreEnter 0.14s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

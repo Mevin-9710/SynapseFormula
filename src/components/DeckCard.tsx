@@ -113,22 +113,22 @@ export const DeckCard: React.FC<DeckCardProps> = ({
 
   return (
     <>
-      <div className="glass-panel rounded-2xl px-3.5 py-3 flex items-center justify-between gap-2">
+      <div className="glass-panel rounded-2xl px-3.5 py-3 flex items-center justify-between gap-2.5">
         {/* Left: Deck Name + "N due · N new" */}
         <div
           onClick={() => onBrowseDeck(deck)}
           className="min-w-0 flex-1 cursor-pointer py-0.5"
         >
-          <h3 className="text-[15px] font-bold tracking-tight truncate">
+          <h3 className="text-[15px] font-bold tracking-tight break-words line-clamp-2 sm:truncate">
             {deck.name}
           </h3>
-          <div className="flex flex-wrap items-center gap-1.5 text-[13px] text-secondary-contrast tabular-nums mt-0.5">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px] text-secondary-contrast tabular-nums mt-0.5">
             <span className={dueCards.length > 0 ? 'font-bold text-black dark:text-white' : ''}>
               {dueCards.length} due
             </span>
             <span>·</span>
             <span>
-              {quotaInfo.availableToday} new today / {quotaInfo.unseenLeftInDeck} left in deck
+              {quotaInfo.availableToday} new / {quotaInfo.unseenLeftInDeck} left
             </span>
             {stableCards.length > 0 && (
               <>
@@ -150,7 +150,7 @@ export const DeckCard: React.FC<DeckCardProps> = ({
           <button
             type="button"
             onClick={handlePrimaryAction}
-            className={`min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`min-h-[44px] px-3 sm:px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
               isPrimarySolid ? 'glass-button-primary' : 'glass-button'
             }`}
           >
@@ -165,7 +165,7 @@ export const DeckCard: React.FC<DeckCardProps> = ({
               setIsMenuOpen(true);
             }}
             aria-label={`More options for ${deck.name}`}
-            className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
+            className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer shrink-0"
           >
             <MoreHorizontal className="w-5 h-5" />
           </button>

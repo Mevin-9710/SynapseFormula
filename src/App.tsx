@@ -126,10 +126,50 @@ export default function App() {
     }
   }, [settings.reduceEffects]);
 
+  // Apply Light / Dark / System theme class to <html> (defaults to Light Mode)
+  const [isDarkResolved, setIsDarkResolved] = useState<boolean>(false);
+
   useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
-    document.documentElement.scrollTo?.({ top: 0, left: 0, behavior: 'smooth' });
-    document.body.scrollTo?.({ top: 0, left: 0, behavior: 'smooth' });
+    const mode = settings.themeMode || 'light';
+    const mediaQuery =
+      typeof window !== 'undefined' && window.matchMedia
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : null;
+
+    const applyTheme = () => {
+      const dark =
+        mode === 'dark' || (mode === 'system' && Boolean(mediaQuery?.matches));
+      setIsDarkResolved(dark);
+      if (dark) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = 'dark';
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.style.colorScheme = 'light';
+      }
+    };
+
+    applyTheme();
+
+    if (mode === 'system' && mediaQuery) {
+      mediaQuery.addEventListener?.('change', applyTheme);
+      return () => mediaQuery.removeEventListener?.('change', applyTheme);
+    }
+  }, [settings.themeMode]);
+
+  const handleToggleTheme = () => {
+    const nextMode: 'light' | 'dark' = isDarkResolved ? 'light' : 'dark';
+    const nextSettings: UserSettings = {
+      ...settings,
+      themeMode: nextMode,
+    };
+    setSettings(nextSettings);
+    saveUserSettings(nextSettings);
+    showToast(nextMode === 'light' ? 'Switched to Light Mode' : 'Switched to Dark Mode', 1800);
+  };
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [currentView, viewRestoreKey, activeStudyDeck]);
 
   const handleSelectView = (nextView: NavView) => {
@@ -656,12 +696,12 @@ export default function App() {
     return { dueDecks: withDue, caughtUpDecks: withoutDue };
   }, [decks, cards, deckSearchQuery, settings]);
 
-  // Active study session takes full screen (dvh, overscroll-contain)
+  // Active study session takes full screen
   if (activeStudyDeck) {
     return (
       <div
         key={`study-${activeStudyDeck.id}`}
-        className="min-h-dvh mobile-canvas-bg selection:bg-black selection:text-white page-restore-enter overscroll-contain"
+        className="min-h-dvh w-full mobile-canvas-bg selection:bg-black selection:text-white page-restore-enter"
       >
         <StudySession
           deck={activeStudyDeck}
@@ -697,12 +737,14 @@ export default function App() {
   const driveReconnectNeeded = Boolean(user && hasDriveDecks && !hasDriveToken);
 
   return (
-    <div className="min-h-dvh mobile-canvas-bg selection:bg-black selection:text-white flex flex-col pb-24">
+    <div className="min-h-dvh w-full mobile-canvas-bg selection:bg-black selection:text-white flex flex-col pb-28">
       <Navbar
         currentView={currentView}
         onSelectView={handleSelectView}
         onOpenSettingsModal={() => setIsSettingsOpen(true)}
         dueCount={dueCardsTotal.length}
+        isDark={isDarkResolved}
+        onToggleTheme={handleToggleTheme}
       />
 
       {syncToast && (

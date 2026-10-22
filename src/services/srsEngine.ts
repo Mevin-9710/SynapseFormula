@@ -7,6 +7,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   swipeGesturesEnabled: false,
   hapticsEnabled: true,
   reduceEffects: false,
+  themeMode: 'light',
 };
 
 export const LEECH_LAPSE_THRESHOLD = 5;

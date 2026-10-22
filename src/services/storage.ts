@@ -51,6 +51,10 @@ export const getUserSettings = (): UserSettings => {
       swipeGesturesEnabled: Boolean(parsed.swipeGesturesEnabled),
       hapticsEnabled: parsed.hapticsEnabled !== undefined ? Boolean(parsed.hapticsEnabled) : true,
       reduceEffects: Boolean(parsed.reduceEffects),
+      themeMode:
+        parsed.themeMode === 'dark' || parsed.themeMode === 'system' || parsed.themeMode === 'light'
+          ? parsed.themeMode
+          : 'light',
     };
   } catch {
     return { ...DEFAULT_USER_SETTINGS };

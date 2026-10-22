@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, BarChart3, Sliders } from 'lucide-react';
+import { Layers, BarChart3, Sliders, Sun, Moon } from 'lucide-react';
 
 export type NavView = 'decks' | 'progress' | 'settings';
 
@@ -8,11 +8,13 @@ interface NavbarProps {
   onSelectView: (view: NavView) => void;
   onOpenSettingsModal: () => void;
   dueCount: number;
+  isDark?: boolean;
+  onToggleTheme?: () => void;
 }
 
 /**
  * Mobile-First Top Bar & Bottom Nav (5.4 & 5.5):
- * - Top bar: Logo, due count, settings button only.
+ * - Top bar: Logo, due count, Light/Dark mode toggle, settings button.
  * - Bottom nav (3 tabs): Decks, Progress, Settings.
  * - Uses .glass-chrome (real blur 14px with opaque fallback), env(safe-area-inset-*) and >= 44x44px targets.
  */
@@ -21,13 +23,15 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectView,
   onOpenSettingsModal,
   dueCount,
+  isDark = false,
+  onToggleTheme,
 }) => {
   return (
     <>
-      {/* Sticky Top Bar: Logo, Due Count, Settings only (5.4) */}
+      {/* Sticky Top Bar: Logo, Due Count, Light/Dark Toggle, Settings (5.4) */}
       <header className="sticky top-0 z-40 w-full glass-chrome border-b px-4 py-2 pt-safe">
         <div className="max-w-xl mx-auto flex items-center justify-between gap-2 min-h-[44px]">
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="w-8 h-8 rounded-xl bg-black dark:bg-white text-white dark:text-black flex items-center justify-center text-sm font-bold shrink-0">
               ∑
             </div>
@@ -36,10 +40,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[13px] font-semibold text-secondary-contrast tabular-nums px-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[13px] font-semibold text-secondary-contrast tabular-nums px-1.5">
               {dueCount} due
             </span>
+
+            {onToggleTheme && (
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
+              >
+                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+            )}
 
             <button
               type="button"

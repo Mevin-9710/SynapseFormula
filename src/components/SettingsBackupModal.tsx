@@ -63,6 +63,9 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
     settings.hapticsEnabled !== undefined ? Boolean(settings.hapticsEnabled) : true
   );
   const [reduceEffects, setReduceEffects] = useState(Boolean(settings.reduceEffects));
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'system'>(
+    settings.themeMode || 'light'
+  );
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -79,6 +82,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
         settings.hapticsEnabled !== undefined ? Boolean(settings.hapticsEnabled) : true
       );
       setReduceEffects(Boolean(settings.reduceEffects));
+      setThemeMode(settings.themeMode || 'light');
       setStatusMsg(null);
       setErrorMsg(null);
     }
@@ -113,6 +117,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
       swipeGesturesEnabled,
       hapticsEnabled,
       reduceEffects,
+      themeMode,
     };
     onSaveSettings(next);
     onClose();
@@ -375,9 +380,27 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
         </div>
 
         {/* Study Experience & Accessibility Switches (5.10, 5.12, 5.20) */}
-        <div className="p-3.5 rounded-2xl glass-panel space-y-2">
-          <div className="text-xs font-bold uppercase tracking-wider text-secondary-contrast mb-1">
-            Study Controls & Visuals
+        <div className="p-3.5 rounded-2xl glass-panel space-y-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-secondary-contrast">
+            Appearance & Study Controls
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-[15px] font-semibold">Color Theme</div>
+            <div className="grid grid-cols-3 gap-2">
+              {(['light', 'dark', 'system'] as const).map(opt => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => setThemeMode(opt)}
+                  className={`min-h-[44px] rounded-xl text-[13px] font-bold capitalize cursor-pointer ${
+                    themeMode === opt ? 'glass-button-primary' : 'glass-button'
+                  }`}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
           </div>
 
           <label className="flex items-center justify-between gap-3 min-h-[44px] cursor-pointer">

@@ -25,6 +25,7 @@ export interface UserSettings {
   swipeGesturesEnabled?: boolean; // default false (5.10)
   hapticsEnabled?: boolean;       // default true (5.12)
   reduceEffects?: boolean;        // default false (5.20)
+  themeMode?: 'light' | 'dark' | 'system'; // default 'light'
 }
 
 export interface ReviewLogEntry {

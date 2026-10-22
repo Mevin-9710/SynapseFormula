@@ -822,9 +822,9 @@ export const StudySession: React.FC<StudySessionProps> = ({
   const cardDerivation = currentCard.derivation || currentCard.derivationSummary;
 
   return (
-    <div className="min-h-dvh max-w-xl landscape:max-w-4xl mx-auto flex flex-col justify-between overscroll-contain pt-safe pl-safe pr-safe">
-      {/* Header (5.9): Back arrow, progress bar ("12 / 40"), visible Undo button, "⋯" menu */}
-      <header className="px-4 pt-2.5 pb-2 space-y-2 shrink-0">
+    <div className="min-h-dvh w-full max-w-xl landscape:max-w-4xl mx-auto flex flex-col pt-safe pl-safe pr-safe">
+      {/* Header (5.9): Sticky top bar with Back arrow, progress bar ("12 / 40"), visible Undo button, "⋯" menu */}
+      <header className="sticky top-0 z-20 glass-chrome border-b px-4 pt-2.5 pb-2 space-y-2 shrink-0">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
@@ -894,10 +894,10 @@ export const StudySession: React.FC<StudySessionProps> = ({
         </div>
       </header>
 
-      {/* Main Content Area: Portrait = stacked; Landscape (5.19) = side-by-side card and rating bar */}
-      <div className="flex-1 flex flex-col landscape:flex-row landscape:items-stretch landscape:gap-4 px-4 pb-28 landscape:pb-4 overflow-y-auto overscroll-contain">
+      {/* Main Content Area: Natural mobile vertical scroll; Portrait = stacked; Landscape (5.19) = side-by-side */}
+      <div className="flex-1 flex flex-col landscape:flex-row landscape:items-start landscape:gap-4 px-4 pt-3 pb-36 landscape:pb-6">
         {/* Flashcard Column */}
-        <div className="flex-1 flex flex-col justify-center my-2 space-y-3 min-w-0">
+        <div className="flex-1 w-full flex flex-col my-1 space-y-3 min-w-0">
           <div
             onTouchStart={handleCardTouchStart}
             onTouchEnd={handleCardTouchEnd}
@@ -911,7 +911,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
                 setIsRevealed(true);
               }
             }}
-            className={`glass-card rounded-2xl p-5 min-h-[280px] flex flex-col justify-between transition-colors ${
+            className={`glass-card rounded-2xl p-4 sm:p-5 min-h-[260px] flex flex-col justify-between transition-colors ${
               !isRevealed && mode !== 'interleaved' && mode !== 'drill'
                 ? 'cursor-pointer'
                 : ''

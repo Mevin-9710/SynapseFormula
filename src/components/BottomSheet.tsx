@@ -126,8 +126,8 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           </div>
         </div>
 
-        {/* Internal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
+        {/* Internal Scrollable Body (min-h-0 required in flex column for mobile scroll) */}
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-4 space-y-4">
           {children}
         </div>
 
