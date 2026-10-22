@@ -51,6 +51,7 @@ import {
 } from '../services/storage';
 import { appendReviewLog, removeReviewLogById } from '../services/reviewLog';
 import { FormulaDisplay, preloadFormulaRender } from './FormulaDisplay';
+import { FormattedText } from './FormattedText';
 import { Scratchpad } from './Scratchpad';
 import { BottomSheet } from './BottomSheet';
 
@@ -718,17 +719,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
   };
 
   const formatStatementText = (text: string) => {
-    const parts = text.split(/(\*[^*]+\*)/g);
-    return parts.map((part, idx) => {
-      if (part.startsWith('*') && part.endsWith('*')) {
-        return (
-          <em key={idx} className="font-serif italic font-semibold px-0.5">
-            {part.slice(1, -1)}
-          </em>
-        );
-      }
-      return <span key={idx}>{part}</span>;
-    });
+    return <FormattedText text={text} />;
   };
 
   if (queue.length === 0) {
@@ -1450,7 +1441,7 @@ const CardPostRevealDetails: React.FC<{
           <span className="text-xs font-bold uppercase tracking-wider text-secondary-contrast block mb-0.5">
             Conditions / Regime
           </span>
-          <p className="text-[15px] leading-snug break-words">{card.conditions}</p>
+          <FormattedText as="p" text={card.conditions} className="text-[15px] leading-snug break-words" />
         </div>
       )}
 
@@ -1472,9 +1463,11 @@ const CardPostRevealDetails: React.FC<{
                   </span>
                 )}
               </div>
-              <p className="text-[15px] text-secondary-contrast break-words leading-snug">
-                {v.meaning}
-              </p>
+              <FormattedText
+                as="p"
+                text={v.meaning}
+                className="text-[15px] text-secondary-contrast break-words leading-snug"
+              />
             </div>
           ))}
         </div>
@@ -1486,17 +1479,21 @@ const CardPostRevealDetails: React.FC<{
           <span className="text-xs font-bold uppercase tracking-wider text-secondary-contrast block mb-0.5">
             Derivation
           </span>
-          <p className="text-[15px] text-secondary-contrast leading-relaxed break-words">
-            {derivation}
-          </p>
+          <FormattedText
+            as="p"
+            text={derivation}
+            className="text-[15px] text-secondary-contrast leading-relaxed break-words"
+          />
         </div>
       )}
 
       {/* Explanation */}
       {card.explanation && (
-        <p className="text-[15px] text-secondary-contrast leading-relaxed pt-1 break-words">
-          {card.explanation}
-        </p>
+        <FormattedText
+          as="p"
+          text={card.explanation}
+          className="text-[15px] text-secondary-contrast leading-relaxed pt-1 break-words"
+        />
       )}
     </div>
   );

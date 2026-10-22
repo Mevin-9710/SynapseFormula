@@ -12,6 +12,7 @@ import { Deck, Flashcard } from '../types';
 import { isCardLeech, isCardStable } from '../services/srsEngine';
 import { updateCardInStorage, getStoredCards } from '../services/storage';
 import { FormulaDisplay } from './FormulaDisplay';
+import { FormattedText } from './FormattedText';
 import { BottomSheet } from './BottomSheet';
 
 interface FormulaBrowserModalProps {
@@ -226,7 +227,7 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
                           )}
                         </div>
                         <p className="text-[15px] font-bold leading-snug break-words">
-                          {card.statement}
+                          <FormattedText text={card.statement} />
                         </p>
                       </div>
 
@@ -304,13 +305,13 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
 
                     {card.conditions && (
                       <div className="text-[13px] glass-panel px-3 py-2 rounded-xl">
-                        <strong>Conditions:</strong> {card.conditions}
+                        <strong>Conditions:</strong> <FormattedText text={card.conditions} />
                       </div>
                     )}
 
                     {deriv && (
                       <div className="text-[13px] glass-panel px-3 py-2 rounded-xl text-secondary-contrast">
-                        <strong>Derivation:</strong> {deriv}
+                        <strong>Derivation:</strong> <FormattedText text={deriv} />
                       </div>
                     )}
 
@@ -324,30 +325,30 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-bold">
                                 <FormulaDisplay
-                                  formula={v.symbol}
-                                  displayMode={false}
-                                  size="xs"
-                                />
-                              </span>
-                              {v.unit && (
-                                <span className="text-xs text-secondary-contrast font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10">
-                                  [
-                                  <FormulaDisplay
-                                    formula={v.unit}
-                                    displayMode={false}
-                                    size="xs"
-                                  />
-                                  ]
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-secondary-contrast text-[13px] break-words">
-                              {v.meaning}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                                   formula={v.symbol}
+                                   displayMode={false}
+                                   size="xs"
+                                 />
+                               </span>
+                               {v.unit && (
+                                 <span className="text-xs text-secondary-contrast font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10">
+                                   [
+                                   <FormulaDisplay
+                                     formula={v.unit}
+                                     displayMode={false}
+                                     size="xs"
+                                   />
+                                   ]
+                                 </span>
+                               )}
+                             </div>
+                             <p className="text-secondary-contrast text-[13px] break-words">
+                               <FormattedText text={v.meaning} />
+                             </p>
+                           </div>
+                         ))}
+                       </div>
+                     )}
                   </div>
                 );
               })}

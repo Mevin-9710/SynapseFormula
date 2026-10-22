@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { Deck, Flashcard } from '../types';
 import { getLocalDateKey, formatRepeatScheduleLabel } from '../services/srsEngine';
+import { FormattedText } from './FormattedText';
 
 interface CalendarViewProps {
   decks: Deck[];
@@ -287,7 +288,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         <span>{formatRepeatScheduleLabel(card)}</span>
                       </div>
                       <p className="text-[13px] font-semibold leading-snug">
-                        {card.statement}
+                        <FormattedText text={card.statement} />
                       </p>
                     </div>
                   ))}

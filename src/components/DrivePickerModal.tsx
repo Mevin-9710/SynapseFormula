@@ -26,6 +26,7 @@ import { VERCEL_MCP_ENDPOINT } from '../services/mcpService';
 import { googleSignIn, getAccessToken, UnauthorizedDomainError } from '../services/auth';
 import { Deck, DriveFileItem, ColumnMapping } from '../types';
 import { FormulaDisplay } from './FormulaDisplay';
+import { FormattedText } from './FormattedText';
 import { ExcelGuideModal } from './ExcelGuideModal';
 import { BottomSheet } from './BottomSheet';
 
@@ -836,7 +837,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                       </span>
                       <div className="p-3.5 rounded-2xl glass-panel space-y-2">
                         <p className="font-bold text-[15px] break-words leading-snug">
-                          {sampleRow[mapping.statementCol] || 'No statement selected'}
+                          <FormattedText text={sampleRow[mapping.statementCol] || 'No statement selected'} />
                         </p>
                         <div className="py-2 px-3 rounded-xl bg-white/90 dark:bg-zinc-900/90 text-center">
                           <FormulaDisplay
@@ -845,14 +846,14 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                           />
                         </div>
                         {sampleCond && (
-                          <p className="text-[13px] px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
-                            <strong>Conditions:</strong> {sampleCond}
-                          </p>
+                          <div className="text-[13px] px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
+                            <strong>Conditions:</strong> <FormattedText text={sampleCond} />
+                          </div>
                         )}
                         {sampleDeriv && (
-                          <p className="text-[13px] text-secondary-contrast px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
-                            <strong>Derivation:</strong> {sampleDeriv}
-                          </p>
+                          <div className="text-[13px] text-secondary-contrast px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10">
+                            <strong>Derivation:</strong> <FormattedText text={sampleDeriv} />
+                          </div>
                         )}
                         {sampleVars.length > 0 && (
                           <div className="pt-2 border-t border-black/10 dark:border-white/10 space-y-1">
