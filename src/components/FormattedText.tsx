@@ -263,4 +263,5 @@ const FormattedLine: React.FC<{
     </Component>
   );
 };
+
 export default FormattedText;
