@@ -6,6 +6,9 @@ import {
   StudyStreakState,
   UserSettings,
   ReviewLogEntry,
+  GameAnalyticsState,
+  GameSessionRecord,
+  PersonalBestRecord,
 } from '../types';
 import {
   DEFAULT_USER_SETTINGS,
@@ -32,6 +35,7 @@ const SETTINGS_KEY = 'synapse_formula_settings_v1';
 const LAST_CLOUD_SYNC_KEY = 'synapse_last_cloud_sync_ts_v1';
 const OFFLINE_DIRTY_CARDS_KEY = 'synapse_offline_dirty_cards_v1';
 const COMPLETED_FIRST_SESSION_KEY = 'synapse_completed_first_session_v1';
+const GAME_ANALYTICS_KEY = 'synapse_formula_game_analytics_v1';
 
 const hasDomStorage = (): boolean => typeof localStorage !== 'undefined';
 
@@ -681,6 +685,160 @@ export const shiftRemainingTodayCardsToTomorrow = (
   return { updatedCards, shiftedCount };
 };
 
+export const getRemainingTimeAttackSeconds = (
+  endsAtEpochMs?: number,
+  nowMs: number = Date.now()
+): number => {
+  if (typeof endsAtEpochMs !== 'number' || !Number.isFinite(endsAtEpochMs)) {
+    return 0;
+  }
+  return Math.max(0, Math.ceil((endsAtEpochMs - nowMs) / 1000));
+};
+
+let memoryGameAnalytics: GameAnalyticsState = {
+  timeAttackBests: {},
+  recentSessions: [],
+};
+
+export const getGameAnalyticsState = (): GameAnalyticsState => {
+  if (!hasDomStorage() || typeof localStorage.getItem !== 'function') {
+    return {
+      classicBest: memoryGameAnalytics.classicBest,
+      timeAttackBests: { ...memoryGameAnalytics.timeAttackBests },
+      recentSessions: [...memoryGameAnalytics.recentSessions],
+    };
+  }
+  try {
+    const raw = localStorage.getItem(GAME_ANALYTICS_KEY);
+    if (!raw) {
+      return {
+        timeAttackBests: {},
+        recentSessions: [],
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<GameAnalyticsState>;
+    return {
+      classicBest: parsed.classicBest,
+      timeAttackBests: parsed.timeAttackBests || {},
+      recentSessions: Array.isArray(parsed.recentSessions) ? parsed.recentSessions : [],
+    };
+  } catch {
+    return {
+      classicBest: memoryGameAnalytics.classicBest,
+      timeAttackBests: { ...memoryGameAnalytics.timeAttackBests },
+      recentSessions: [...memoryGameAnalytics.recentSessions],
+    };
+  }
+};
+
+export const saveGameAnalyticsState = (state: GameAnalyticsState): void => {
+  memoryGameAnalytics = {
+    classicBest: state.classicBest,
+    timeAttackBests: { ...(state.timeAttackBests || {}) },
+    recentSessions: Array.isArray(state.recentSessions) ? [...state.recentSessions] : [],
+  };
+  if (!hasDomStorage() || typeof localStorage.setItem !== 'function') return;
+  try {
+    localStorage.setItem(GAME_ANALYTICS_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.error('Error saving game analytics state:', err);
+  }
+};
+
+function isBetterPersonalBest(
+  candidateScore: number,
+  candidateCards: number,
+  existing?: PersonalBestRecord
+): boolean {
+  if (!existing) return true;
+  if (candidateScore !== existing.bestScore) {
+    return candidateScore > existing.bestScore;
+  }
+  return candidateCards > existing.mostCardsCompleted;
+}
+
+/**
+ * Safely persists a completed Classic or Time Attack session and updates Personal Bests.
+ * Idempotent by `record.id`: calling this multiple times with the same session ID (e.g., on
+ * timer expiry + re-render or page refresh) will never duplicate the session or score.
+ */
+export const recordCompletedGameSession = (
+  record: GameSessionRecord
+): {
+  state: GameAnalyticsState;
+  isNewPersonalBest: boolean;
+  wasDuplicate: boolean;
+} => {
+  const current = getGameAnalyticsState();
+  if (current.recentSessions.some(s => s.id === record.id)) {
+    return {
+      state: current,
+      isNewPersonalBest: false,
+      wasDuplicate: true,
+    };
+  }
+
+  let isNewPersonalBest = false;
+  let nextClassicBest = current.classicBest;
+  const nextTimeAttackBests = { ...current.timeAttackBests };
+
+  if (record.cardsCompleted > 0) {
+    if (record.mode === 'classic') {
+      if (isBetterPersonalBest(record.score, record.cardsCompleted, current.classicBest)) {
+        nextClassicBest = {
+          bestScore: record.score,
+          mostCardsCompleted: Math.max(
+            record.cardsCompleted,
+            current.classicBest?.mostCardsCompleted || 0
+          ),
+          achievedAt: record.completedAt,
+        };
+        isNewPersonalBest = true;
+      } else if (
+        current.classicBest &&
+        record.cardsCompleted > current.classicBest.mostCardsCompleted
+      ) {
+        nextClassicBest = {
+          ...current.classicBest,
+          mostCardsCompleted: record.cardsCompleted,
+        };
+      }
+    } else if (record.mode === 'time-attack' && record.durationSeconds) {
+      const dur = record.durationSeconds;
+      const existingBest = current.timeAttackBests[dur];
+      if (isBetterPersonalBest(record.score, record.cardsCompleted, existingBest)) {
+        nextTimeAttackBests[dur] = {
+          bestScore: record.score,
+          mostCardsCompleted: Math.max(
+            record.cardsCompleted,
+            existingBest?.mostCardsCompleted || 0
+          ),
+          achievedAt: record.completedAt,
+        };
+        isNewPersonalBest = true;
+      } else if (existingBest && record.cardsCompleted > existingBest.mostCardsCompleted) {
+        nextTimeAttackBests[dur] = {
+          ...existingBest,
+          mostCardsCompleted: record.cardsCompleted,
+        };
+      }
+    }
+  }
+
+  const nextState: GameAnalyticsState = {
+    classicBest: nextClassicBest,
+    timeAttackBests: nextTimeAttackBests,
+    recentSessions: [record, ...current.recentSessions].slice(0, 100),
+  };
+
+  saveGameAnalyticsState(nextState);
+  return {
+    state: nextState,
+    isNewPersonalBest,
+    wasDuplicate: false,
+  };
+};
+
 export interface FullBackupPayload {
   version: number;
   exportedAt: string;
@@ -689,6 +847,7 @@ export interface FullBackupPayload {
   decks: Deck[];
   cards: Flashcard[];
   reviewLogs: ReviewLogEntry[];
+  gameAnalytics?: GameAnalyticsState;
 }
 
 export const exportFullBackupJson = async (): Promise<string> => {
@@ -701,6 +860,7 @@ export const exportFullBackupJson = async (): Promise<string> => {
     decks: getStoredDecks(),
     cards: getStoredCards(),
     reviewLogs: getReviewLogsSync(),
+    gameAnalytics: getGameAnalyticsState(),
   };
   return JSON.stringify(payload, null, 2);
 };
@@ -799,6 +959,14 @@ export const importFullBackupJson = async (
     lastStudiedDate: parsed.streak?.lastStudiedDate || currentStreak.lastStudiedDate,
   };
   saveStudyStreakState(finalStreak);
+
+  if (parsed.gameAnalytics) {
+    for (const session of parsed.gameAnalytics.recentSessions || []) {
+      if (session && session.id) {
+        recordCompletedGameSession(session);
+      }
+    }
+  }
 
   const mergedLogsCount = Array.isArray(parsed.reviewLogs)
     ? await mergeImportedReviewLogs(parsed.reviewLogs)

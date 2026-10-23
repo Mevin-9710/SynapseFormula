@@ -1,4 +1,4 @@
-import { Flashcard, SrsRating, UserSettings } from '../types';
+import { Deck, Flashcard, RoundProgressInfo, SrsRating, UserSettings } from '../types';
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   maxIntervalDays: 4,
@@ -119,6 +119,126 @@ export const isCardLeech = (card: Flashcard): boolean => {
 };
 
 /**
+ * Returns true if a card has already been introduced/learned at least once.
+ * Unseen cards (state === 'new', repetitionCount === 0, and no firstTimeReviewedAt) return false.
+ */
+export const isCardLearned = (card: Flashcard): boolean => {
+  return (
+    (card.repetitionCount || 0) > 0 ||
+    Boolean(card.firstTimeReviewedAt) ||
+    card.state !== 'new'
+  );
+};
+
+/**
+ * Calculates session score points delta and recall accuracy flags for a rating.
+ * - Points (+3 for Good/Easy, -1 for Again) are awarded ONLY when testing a formula already learned.
+ * - Introducing or revealing a formula for the first time earns 0 points and does not count as a recall accuracy trial.
+ */
+export const calculateRatingScoreDelta = (
+  cardBeforeRating: Flashcard,
+  rating: SrsRating
+): {
+  pointsDelta: number;
+  isRecallTrial: boolean;
+  isCorrectRecall: boolean;
+} => {
+  if (rating === 'first-time' || !isCardLearned(cardBeforeRating)) {
+    return {
+      pointsDelta: 0,
+      isRecallTrial: false,
+      isCorrectRecall: false,
+    };
+  }
+
+  if (rating === 'again') {
+    return {
+      pointsDelta: -1,
+      isRecallTrial: true,
+      isCorrectRecall: false,
+    };
+  }
+
+  return {
+    pointsDelta: 3,
+    isRecallTrial: true,
+    isCorrectRecall: true,
+  };
+};
+
+/**
+ * Reusable 5-card round progress calculation.
+ * - 5 completed cards constitute a round.
+ * - A 50-card session has 10 rounds.
+ * - A 63-card session has 12 rounds of 5 and a final round of 3.
+ */
+export const computeRoundProgress = (
+  completedCount: number,
+  totalInSession: number,
+  roundSize = 5
+): RoundProgressInfo => {
+  const safeRoundSize = Math.max(1, roundSize);
+  const safeTotal = Math.max(0, totalInSession);
+  const safeCompleted = Math.max(0, Math.min(completedCount, safeTotal));
+
+  if (safeTotal === 0) {
+    return {
+      roundSize: safeRoundSize,
+      currentRound: 1,
+      totalRounds: 1,
+      cardInRound: 0,
+      cardsInCurrentRound: 0,
+      justCompletedRound: null,
+      overallPercent: 0,
+      roundPercent: 0,
+    };
+  }
+
+  const totalRounds = Math.max(1, Math.ceil(safeTotal / safeRoundSize));
+  const isFinished = safeCompleted >= safeTotal;
+  const currentRound = isFinished
+    ? totalRounds
+    : Math.min(totalRounds, Math.floor(safeCompleted / safeRoundSize) + 1);
+
+  const roundStartIdx = (currentRound - 1) * safeRoundSize;
+  const cardsInCurrentRound = Math.max(
+    1,
+    Math.min(safeRoundSize, safeTotal - roundStartIdx)
+  );
+
+  const cardInRound = isFinished
+    ? cardsInCurrentRound
+    : Math.min(cardsInCurrentRound, (safeCompleted % safeRoundSize) + 1);
+
+  const justCompletedRound =
+    safeCompleted > 0 &&
+    safeCompleted < safeTotal &&
+    safeCompleted % safeRoundSize === 0
+      ? safeCompleted / safeRoundSize
+      : null;
+
+  const overallPercent = Math.min(100, Math.round((safeCompleted / safeTotal) * 100));
+  const completedInCurrentRound = isFinished
+    ? cardsInCurrentRound
+    : safeCompleted % safeRoundSize;
+  const roundPercent = Math.min(
+    100,
+    Math.round((completedInCurrentRound / cardsInCurrentRound) * 100)
+  );
+
+  return {
+    roundSize: safeRoundSize,
+    currentRound,
+    totalRounds,
+    cardInRound,
+    cardsInCurrentRound,
+    justCompletedRound,
+    overallPercent,
+    roundPercent,
+  };
+};
+
+/**
  * Checks if a card is due today (any time up to 23:59:59 today) or earlier.
  * Excludes suspended cards. In final-week mode (last 3 days before exam),
  * also surfaces seen cards not yet reviewed within the last 3 days.
@@ -161,6 +281,264 @@ export const sortDueCardsMostOverdueFirst = (cards: Flashcard[]): Flashcard[] =>
     if (aTime !== bTime) return aTime - bTime;
     return (new Date(a.dueDate).getTime() || 0) - (new Date(b.dueDate).getTime() || 0);
   });
+};
+
+function shuffleWithRandom<T>(items: T[], randomFn: () => number): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(randomFn() * (i + 1));
+    const temp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = temp;
+  }
+  return copy;
+}
+
+/**
+ * Builds the unified priority-shuffled review queue across all decks:
+ * 1. Overdue learned cards first (grouped by overdue day-bucket, oldest bucket first, shuffled within each bucket).
+ * 2. Other learned cards due today (shuffled within the tier).
+ * 3. Unseen new cards mixed in small numbers (1 new card per 3 due cards) up to remaining daily new-card quota.
+ * 4. Never includes learned cards that are not due today, and never duplicates cards.
+ */
+export const buildUnifiedReviewQueue = (
+  allCards: Flashcard[],
+  decks: Deck[] = [],
+  settings: Partial<UserSettings> = DEFAULT_USER_SETTINGS,
+  now: Date = new Date(),
+  randomFn: () => number = Math.random
+): Flashcard[] => {
+  const todayKey = getLocalDateKey(now);
+  const dailyReviewCap = Math.max(
+    1,
+    settings.dailyReviewCap ?? DEFAULT_USER_SETTINGS.dailyReviewCap
+  );
+  const globalNewLimit = Math.max(
+    0,
+    settings.newCardsPerDay ?? DEFAULT_USER_SETTINGS.newCardsPerDay
+  );
+
+  // Deduplicate active, non-suspended cards
+  const seenIds = new Set<string>();
+  const activePool: Flashcard[] = [];
+  for (const card of allCards) {
+    if (!card || card.suspended || !card.id || seenIds.has(card.id)) continue;
+    seenIds.add(card.id);
+    activePool.push(card);
+  }
+
+  const overdueByBucket = new Map<string, Flashcard[]>();
+  const dueTodayTier: Flashcard[] = [];
+  const unseenCandidates: Flashcard[] = [];
+
+  for (const card of activePool) {
+    if (isCardLearned(card)) {
+      if (!isCardDueToday(card, now, settings)) {
+        // Strict eligibility: never include learned cards that are not due today
+        continue;
+      }
+      const effectiveDateKey =
+        card.shiftedFromDate && card.shiftedFromDate < todayKey
+          ? card.shiftedFromDate
+          : getLocalDateKey(card.dueDate);
+
+      if (effectiveDateKey < todayKey) {
+        const bucket = overdueByBucket.get(effectiveDateKey) || [];
+        bucket.push(card);
+        overdueByBucket.set(effectiveDateKey, bucket);
+      } else {
+        dueTodayTier.push(card);
+      }
+    } else {
+      unseenCandidates.push(card);
+    }
+  }
+
+  // Sort overdue buckets oldest dateKey first, shuffling cards within each comparable day bucket
+  const sortedOverdueKeys = Array.from(overdueByBucket.keys()).sort();
+  const overdueQueue: Flashcard[] = [];
+  for (const key of sortedOverdueKeys) {
+    const bucket = overdueByBucket.get(key) || [];
+    overdueQueue.push(...shuffleWithRandom(bucket, randomFn));
+  }
+
+  const dueTodayQueue = shuffleWithRandom(dueTodayTier, randomFn);
+  const dueQueue = [...overdueQueue, ...dueTodayQueue];
+
+  // Calculate remaining new-card quota today (global and per-deck overrides)
+  const deckMap = new Map<string, Deck>(decks.map(d => [d.id, d]));
+  const introducedTodayByDeck: Record<string, number> = {};
+  let introducedTodayGlobal = 0;
+
+  for (const c of allCards) {
+    if (!c) continue;
+    const introToday =
+      (c.firstTimeReviewedAt && getLocalDateKey(c.firstTimeReviewedAt) === todayKey) ||
+      (c.lastReviewedAt && c.repetitionCount === 1 && getLocalDateKey(c.lastReviewedAt) === todayKey);
+    if (introToday) {
+      introducedTodayGlobal += 1;
+      introducedTodayByDeck[c.deckId] = (introducedTodayByDeck[c.deckId] || 0) + 1;
+    }
+  }
+
+  let remainingGlobalNew = Math.max(0, globalNewLimit - introducedTodayGlobal);
+  const shuffledUnseen = shuffleWithRandom(unseenCandidates, randomFn);
+  const selectedNewCards: Flashcard[] = [];
+  const pickedNewByDeck: Record<string, number> = {};
+
+  for (const candidate of shuffledUnseen) {
+    const deck = deckMap.get(candidate.deckId);
+    const hasOverride =
+      deck && typeof deck.newCardsPerDayOverride === 'number' && deck.newCardsPerDayOverride > 0;
+    const deckLimit = hasOverride ? deck!.newCardsPerDayOverride! : globalNewLimit;
+    const alreadyInDeck =
+      (introducedTodayByDeck[candidate.deckId] || 0) + (pickedNewByDeck[candidate.deckId] || 0);
+
+    if (alreadyInDeck >= deckLimit) continue;
+    if (!hasOverride && remainingGlobalNew <= 0) continue;
+
+    selectedNewCards.push(candidate);
+    pickedNewByDeck[candidate.deckId] = (pickedNewByDeck[candidate.deckId] || 0) + 1;
+    if (!hasOverride) {
+      remainingGlobalNew = Math.max(0, remainingGlobalNew - 1);
+    }
+  }
+
+  // Interleave new cards in small numbers (1 new card after every 3 due cards)
+  const interleavedQueue: Flashcard[] = [];
+  let dueIdx = 0;
+  let newIdx = 0;
+  const NEW_CARD_STRIDE = 3;
+
+  while (
+    (dueIdx < dueQueue.length || newIdx < selectedNewCards.length) &&
+    interleavedQueue.length < dailyReviewCap
+  ) {
+    let addedDueInCycle = 0;
+    while (
+      dueIdx < dueQueue.length &&
+      addedDueInCycle < NEW_CARD_STRIDE &&
+      interleavedQueue.length < dailyReviewCap
+    ) {
+      interleavedQueue.push(dueQueue[dueIdx++]);
+      addedDueInCycle += 1;
+    }
+
+    if (newIdx < selectedNewCards.length && interleavedQueue.length < dailyReviewCap) {
+      interleavedQueue.push(selectedNewCards[newIdx++]);
+    }
+  }
+
+  return interleavedQueue;
+};
+
+/**
+ * Computes graduated card-level mastery score in [0, 1]:
+ * - Unseen / New (not yet learned): 0 (0%)
+ * - Learning or repetitionCount === 0: 0.25 (25%)
+ * - Active Review (not yet stable): 0.35 to 0.85 based on consecutiveGoods and interval progress toward cap
+ * - Stable (3+ consecutiveGoods and intervalDays >= effectiveCap): 1.0 (100%)
+ */
+export const computeCardMasteryScore = (
+  card: Flashcard,
+  settings?: Partial<UserSettings>,
+  referenceDate: Date = new Date()
+): number => {
+  if (card.suspended || !isCardLearned(card)) {
+    return 0;
+  }
+  if (isCardStable(card, settings, referenceDate)) {
+    return 1;
+  }
+  if (card.state === 'learning' || (card.repetitionCount || 0) === 0) {
+    return 0.25;
+  }
+  const cap = getEffectiveMaxIntervalDays(settings, referenceDate);
+  const goodsRatio = Math.min(1, (card.consecutiveGoods || 0) / 3);
+  const intervalRatio = Math.min(1, Math.max(0, card.intervalDays || 0) / Math.max(1, cap));
+  return Math.min(0.85, Number((0.35 + 0.25 * goodsRatio + 0.25 * intervalRatio).toFixed(4)));
+};
+
+export interface TopicMasteryItem {
+  category: string;
+  masteryPct: number;
+  cardCount: number;
+  stableCount: number;
+  dueCount: number;
+}
+
+/**
+ * Computes overall pool mastery percentage and topic-level mastery breakdown from real card SRS state.
+ */
+export const computePoolAndTopicMastery = (
+  cards: Flashcard[],
+  settings?: Partial<UserSettings>,
+  referenceDate: Date = new Date()
+): {
+  overallMasteryPct: number;
+  activeCount: number;
+  stableCount: number;
+  topics: TopicMasteryItem[];
+} => {
+  const activeCards = cards.filter(c => !c.suspended);
+  if (activeCards.length === 0) {
+    return {
+      overallMasteryPct: 0,
+      activeCount: 0,
+      stableCount: 0,
+      topics: [],
+    };
+  }
+
+  let totalScore = 0;
+  let stableCount = 0;
+  const topicMap = new Map<
+    string,
+    { scoreSum: number; count: number; stableCount: number; dueCount: number }
+  >();
+
+  for (const card of activeCards) {
+    const score = computeCardMasteryScore(card, settings, referenceDate);
+    const stable = isCardStable(card, settings, referenceDate);
+    const due = isCardLearned(card) && isCardDueToday(card, referenceDate, settings);
+    totalScore += score;
+    if (stable) stableCount += 1;
+
+    const categoryLabel = (card.category || '').trim() || 'Uncategorized';
+    const existing = topicMap.get(categoryLabel) || {
+      scoreSum: 0,
+      count: 0,
+      stableCount: 0,
+      dueCount: 0,
+    };
+    existing.scoreSum += score;
+    existing.count += 1;
+    if (stable) existing.stableCount += 1;
+    if (due) existing.dueCount += 1;
+    topicMap.set(categoryLabel, existing);
+  }
+
+  const overallMasteryPct = Math.round((totalScore / activeCards.length) * 100);
+  const topics: TopicMasteryItem[] = Array.from(topicMap.entries())
+    .map(([category, data]) => ({
+      category,
+      masteryPct: Math.round((data.scoreSum / data.count) * 100),
+      cardCount: data.count,
+      stableCount: data.stableCount,
+      dueCount: data.dueCount,
+    }))
+    .sort((a, b) => {
+      if (a.masteryPct !== b.masteryPct) return a.masteryPct - b.masteryPct;
+      if (b.dueCount !== a.dueCount) return b.dueCount - a.dueCount;
+      return a.category.localeCompare(b.category);
+    });
+
+  return {
+    overallMasteryPct,
+    activeCount: activeCards.length,
+    stableCount,
+    topics,
+  };
 };
 
 /**

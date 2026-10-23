@@ -1,5 +1,9 @@
-import { ReviewLogEntry } from '../types';
-import { getLocalDateKey } from './srsEngine';
+import { Flashcard, ReviewLogEntry, UserSettings } from '../types';
+import {
+  computeCardMasteryScore,
+  computePoolAndTopicMastery,
+  getLocalDateKey,
+} from './srsEngine';
 
 const DB_NAME = 'synapse_formula_idb_v1';
 const DB_VERSION = 1;
@@ -283,3 +287,136 @@ export function computeReviewAnalytics(
     reviewsDoneToday,
   };
 }
+
+export interface HistoricalMasteryPoint {
+  dateKey: string;
+  label: string;
+  masteryPct: number;
+  cumulativeReviews: number;
+}
+
+/**
+ * Reconstructs daily mastery percentage trajectory from chronological ReviewLogEntry events.
+ * Because ReviewLogEntry records { cardId, ts, rating, prevInterval, newInterval } rather than full
+ * daily database snapshots, this replays each card's review transitions up to each day's cutoff
+ * and aligns today's final point with the live pool mastery.
+ * Returns an empty array when no review logs exist (never fabricates historical data).
+ */
+export function computeHistoricalMasterySeries(
+  cards: Flashcard[],
+  logs: ReviewLogEntry[],
+  settings?: Partial<UserSettings>,
+  maxDays = 14,
+  now: Date = new Date()
+): HistoricalMasteryPoint[] {
+  const activeCards = cards.filter(c => !c.suspended);
+  if (activeCards.length === 0 || logs.length === 0) {
+    return [];
+  }
+
+  const sortedLogs = [...logs].sort((a, b) => a.ts - b.ts);
+  const firstLogDate = new Date(sortedLogs[0].ts);
+  const firstMidnight = new Date(
+    firstLogDate.getFullYear(),
+    firstLogDate.getMonth(),
+    firstLogDate.getDate()
+  );
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const spanDays = Math.max(
+    1,
+    Math.min(
+      maxDays,
+      Math.round((todayMidnight.getTime() - firstMidnight.getTime()) / (24 * 60 * 60 * 1000)) + 1
+    )
+  );
+
+  // Build baseline simulated card map starting unseen before logs are replayed
+  const simMap = new Map<string, Flashcard>();
+  for (const c of activeCards) {
+    simMap.set(c.id, {
+      ...c,
+      state: 'new',
+      intervalDays: 0,
+      repetitionCount: 0,
+      consecutiveGoods: 0,
+      firstTimeReviewedAt: undefined,
+      lastReviewedAt: undefined,
+    });
+  }
+
+  const points: HistoricalMasteryPoint[] = [];
+  let logCursor = 0;
+
+  for (let i = spanDays - 1; i >= 0; i--) {
+    const dayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const dayEndMs = new Date(
+      dayDate.getFullYear(),
+      dayDate.getMonth(),
+      dayDate.getDate(),
+      23,
+      59,
+      59,
+      999
+    ).getTime();
+    const dateKey = getLocalDateKey(dayDate);
+
+    while (logCursor < sortedLogs.length && sortedLogs[logCursor].ts <= dayEndMs) {
+      const entry = sortedLogs[logCursor++];
+      const simCard = simMap.get(entry.cardId);
+      if (simCard) {
+        const iso = new Date(entry.ts).toISOString();
+        if (entry.rating === 'first-time') {
+          simCard.state = 'learning';
+          simCard.intervalDays = entry.newInterval;
+          simCard.firstTimeReviewedAt = simCard.firstTimeReviewedAt || iso;
+        } else if (entry.rating === 'again') {
+          simCard.state = simCard.repetitionCount > 0 ? 'review' : 'learning';
+          simCard.intervalDays = entry.newInterval;
+          simCard.consecutiveGoods = 0;
+          simCard.firstTimeReviewedAt = simCard.firstTimeReviewedAt || iso;
+          simCard.lastReviewedAt = iso;
+        } else if (entry.rating === 'hard') {
+          simCard.state = simCard.repetitionCount > 0 ? 'review' : 'learning';
+          simCard.intervalDays = entry.newInterval;
+          simCard.consecutiveGoods = 0;
+          if (simCard.repetitionCount > 0) simCard.repetitionCount += 1;
+          simCard.firstTimeReviewedAt = simCard.firstTimeReviewedAt || iso;
+          simCard.lastReviewedAt = iso;
+        } else {
+          // 'good' | 'easy'
+          simCard.state = 'review';
+          simCard.intervalDays = entry.newInterval;
+          simCard.repetitionCount = (simCard.repetitionCount || 0) + 1;
+          simCard.consecutiveGoods = (simCard.consecutiveGoods || 0) + 1;
+          simCard.firstTimeReviewedAt = simCard.firstTimeReviewedAt || iso;
+          simCard.lastReviewedAt = iso;
+        }
+      }
+    }
+
+    if (i === 0) {
+      const liveMastery = computePoolAndTopicMastery(activeCards, settings, now).overallMasteryPct;
+      points.push({
+        dateKey,
+        label: dayDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        masteryPct: liveMastery,
+        cumulativeReviews: logCursor,
+      });
+    } else {
+      let sum = 0;
+      for (const simCard of simMap.values()) {
+        sum += computeCardMasteryScore(simCard, settings, dayDate);
+      }
+      const pct = Math.round((sum / activeCards.length) * 100);
+      points.push({
+        dateKey,
+        label: dayDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        masteryPct: pct,
+        cumulativeReviews: logCursor,
+      });
+    }
+  }
+
+  return points;
+}
+

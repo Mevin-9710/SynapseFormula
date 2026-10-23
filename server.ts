@@ -5,7 +5,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import mcpHandler from './api/mcp';
-import handleAssistantChat from './api/assistant';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,9 +26,6 @@ async function startServer() {
     req.url = '/api/mcp?action=manifest';
     return mcpHandler(req, res);
   });
-
-  // AI Assistant endpoint ("Circle Your Doubt") powered by Gemini 3.8 Flash + deck context
-  app.post('/api/assistant/chat', (req, res) => handleAssistantChat(req, res));
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

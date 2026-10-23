@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -11,15 +11,14 @@ import {
   PauseCircle,
   Edit3,
   Split,
-  Shuffle,
   ShieldCheck,
   MoreHorizontal,
   PenTool,
   RotateCcw,
   Check,
   Zap,
-  Minus,
-  Sparkles,
+  Timer,
+  Trophy,
 } from 'lucide-react';
 import {
   Flashcard,
@@ -28,16 +27,19 @@ import {
   SrsRating,
   StudySessionMode,
   UserSettings,
+  GameMode,
+  TimeAttackDuration,
 } from '../types';
 import {
   calculateNextReview,
   previewRatingIntervals,
-  generateFormulaCloze,
-  generateInterleavedFormulaOptions,
   isCardDueToday,
   isCardLeech,
   isCardStable,
   sortDueCardsMostOverdueFirst,
+  buildUnifiedReviewQueue,
+  calculateRatingScoreDelta,
+  computeRoundProgress,
 } from '../services/srsEngine';
 import {
   updateCardInStorage,
@@ -49,12 +51,14 @@ import {
   getNewCardQuotaForDeck,
   splitCardInStorage,
   markFirstSessionCompleted,
+  getRemainingTimeAttackSeconds,
+  recordCompletedGameSession,
+  getGameAnalyticsState,
 } from '../services/storage';
 import { appendReviewLog, removeReviewLogById } from '../services/reviewLog';
 import { FormulaDisplay, preloadFormulaRender } from './FormulaDisplay';
 import { FormattedText } from './FormattedText';
 import { Scratchpad } from './Scratchpad';
-import { DoubtAssistant } from './DoubtAssistant';
 import { BottomSheet } from './BottomSheet';
 
 interface StudySessionProps {
@@ -63,6 +67,8 @@ interface StudySessionProps {
   allDecks?: Deck[];
   allCards?: Flashcard[];
   mode?: StudySessionMode;
+  gameMode?: GameMode;
+  timeLimitSeconds?: TimeAttackDuration;
   resumeFromSession?: boolean;
   initialCardIndex?: number;
   settings?: UserSettings;
@@ -76,9 +82,19 @@ interface UndoSnapshot {
   queueBeforeRating: Flashcard[];
   indexBeforeRating: number;
   completedBeforeRating: number;
+  scoreBeforeRating: number;
+  correctBeforeRating: number;
+  incorrectBeforeRating: number;
   reviewLogId?: string;
   ratingLabel: string;
 }
+
+const formatCountdownMmSs = (totalSeconds: number): string => {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+};
 
 export const StudySession: React.FC<StudySessionProps> = ({
   deck,
@@ -86,6 +102,8 @@ export const StudySession: React.FC<StudySessionProps> = ({
   allDecks = [],
   allCards = [],
   mode = 'recall',
+  gameMode: propGameMode = 'classic',
+  timeLimitSeconds: propTimeLimitSeconds = 300,
   resumeFromSession = false,
   initialCardIndex = 0,
   settings: propSettings,
@@ -98,16 +116,36 @@ export const StudySession: React.FC<StudySessionProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [stage, setStage] = useState<CardStage>('statement');
   const [isRevealed, setIsRevealed] = useState(false);
-  const [selectedClozeOption, setSelectedClozeOption] = useState<string | null>(null);
-  const [selectedInterleavedOption, setSelectedInterleavedOption] = useState<string | null>(null);
   const [completedCount, setCompletedCount] = useState(0);
   const [sessionFinished, setSessionFinished] = useState(false);
+  const [timeExpired, setTimeExpired] = useState(false);
   const [shiftedToTomorrowCount, setShiftedToTomorrowCount] = useState<number | null>(null);
+
+  // Game Mode, Score, Accuracy & Timer State
+  const [activeGameMode, setActiveGameMode] = useState<GameMode>(propGameMode);
+  const [activeTimeLimit, setActiveTimeLimit] = useState<TimeAttackDuration>(propTimeLimitSeconds);
+  const [sessionId, setSessionId] = useState<string>(
+    () => `gsess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  );
+  const [score, setScore] = useState<number>(0);
+  const [correctCount, setCorrectCount] = useState<number>(0);
+  const [incorrectCount, setIncorrectCount] = useState<number>(0);
+  const [startedAtEpochMs, setStartedAtEpochMs] = useState<number>(() => Date.now());
+  const [endsAtEpochMs, setEndsAtEpochMs] = useState<number | undefined>(undefined);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(propTimeLimitSeconds);
+  const [isNewPersonalBest, setIsNewPersonalBest] = useState<boolean>(false);
+
+  // Celebratory Round-Completion Pop Up Modal after each 5-card round
+  const [completedRoundModal, setCompletedRoundModal] = useState<{
+    roundNumber: number;
+    scoreAtRound: number;
+  } | null>(null);
+  const roundModalOpenTimeRef = useRef<number | null>(null);
+  const hasEndedSessionRef = useRef<boolean>(false);
 
   // Header "⋯" Menu & Scratchpad Draw state (5.9 & 5.13)
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [showScratchpad, setShowScratchpad] = useState(false);
-  const [isDoubtMode, setIsDoubtMode] = useState(false);
   const [confirmDeleteCurrent, setConfirmDeleteCurrent] = useState(false);
 
   // Undo last rating state + 5s Undo Toast for swipe gestures (2.6 & 5.10)
@@ -135,6 +173,29 @@ export const StudySession: React.FC<StudySessionProps> = ({
     const pool = allCards.length > 0 ? allCards : getStoredCards();
     return getNewCardQuotaForDeck(deck, cards, pool, settings);
   }, [deck, cards, allCards, settings]);
+
+  const showRoundCompletionPopup = (roundNum: number, scoreAtRound: number) => {
+    roundModalOpenTimeRef.current = Date.now();
+    setCompletedRoundModal({ roundNumber: roundNum, scoreAtRound });
+  };
+
+  const handleDismissRoundModal = () => {
+    if (roundModalOpenTimeRef.current && endsAtEpochMs) {
+      const elapsedModalMs = Math.max(0, Date.now() - roundModalOpenTimeRef.current);
+      // Pause countdown timer during round celebration so user isn't penalized
+      setEndsAtEpochMs(prev => (prev ? prev + elapsedModalMs : prev));
+    }
+    roundModalOpenTimeRef.current = null;
+    setCompletedRoundModal(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (undoToastTimerRef.current) {
+        window.clearTimeout(undoToastTimerRef.current);
+      }
+    };
+  }, []);
 
   // Screen Wake Lock API (5.12): Keep screen awake during a study session
   useEffect(() => {
@@ -168,12 +229,54 @@ export const StudySession: React.FC<StudySessionProps> = ({
     cardStartTimeRef.current = Date.now();
   }, [currentIndex, queue]);
 
+  // Finalize session & record game analytics idempotently (once per sessionId)
+  const finalizeGameSession = useCallback(
+    (finalParams: {
+      finalScore: number;
+      finalCompleted: number;
+      finalCorrect: number;
+      finalIncorrect: number;
+      expiredByTimer?: boolean;
+    }) => {
+      if (hasEndedSessionRef.current) return;
+      hasEndedSessionRef.current = true;
+
+      clearDeckSessionState(deck.id, mode);
+
+      if (mode !== 'practice' && mode !== 'first-time') {
+        const res = recordCompletedGameSession({
+          id: sessionId,
+          mode: activeGameMode,
+          durationSeconds: activeGameMode === 'time-attack' ? activeTimeLimit : undefined,
+          score: finalParams.finalScore,
+          cardsCompleted: finalParams.finalCompleted,
+          correctCount: finalParams.finalCorrect,
+          incorrectCount: finalParams.finalIncorrect,
+          roundsCompleted: Math.floor(finalParams.finalCompleted / 5),
+          completedAt: new Date().toISOString(),
+        });
+        setIsNewPersonalBest(res.isNewPersonalBest);
+      }
+
+      if (finalParams.expiredByTimer) {
+        setTimeExpired(true);
+      }
+      setSessionFinished(true);
+    },
+    [deck.id, mode, sessionId, activeGameMode, activeTimeLimit]
+  );
+
   useEffect(() => {
     const activeCards = cards.filter(c => !c.suspended);
     if (activeCards.length === 0) {
       setQueue([]);
       return;
     }
+
+    hasEndedSessionRef.current = false;
+    setTimeExpired(false);
+    setIsNewPersonalBest(false);
+    setCompletedRoundModal(null);
 
     const savedSession =
       mode === 'first-time' ? deck.firstTimeSessionState : deck.sessionState;
@@ -185,17 +288,66 @@ export const StudySession: React.FC<StudySessionProps> = ({
       savedSession &&
       savedSession.remainingQueueIds.length > 0
     ) {
-      const remaining = savedSession.remainingQueueIds
-        .map(id => activeCards.find(c => c.id === id))
-        .filter((c): c is Flashcard => Boolean(c));
+      // If resuming a Time Attack session whose wall-clock deadline already passed, start fresh or end cleanly
+      const resumedGameMode = savedSession.gameMode || propGameMode;
+      const resumedLimit = savedSession.timeLimitSeconds || propTimeLimitSeconds;
+      const isExpiredTimeAttack =
+        resumedGameMode === 'time-attack' &&
+        savedSession.endsAtEpochMs &&
+        getRemainingTimeAttackSeconds(savedSession.endsAtEpochMs) <= 0;
 
-      if (remaining.length > 0) {
-        setQueue(remaining);
-        setCurrentIndex(0);
-        setStage('statement');
-        setCompletedCount(savedSession.completedInSession || 0);
-        return;
+      if (!isExpiredTimeAttack) {
+        const lookupPool = allCards.length > 0 ? allCards.filter(c => !c.suspended) : activeCards;
+        const remaining = savedSession.remainingQueueIds
+          .map(id => lookupPool.find(c => c.id === id))
+          .filter((c): c is Flashcard => Boolean(c));
+
+        if (remaining.length > 0) {
+          setQueue(remaining);
+          setCurrentIndex(0);
+          setStage('statement');
+          setCompletedCount(savedSession.completedInSession || 0);
+          setScore(savedSession.score || 0);
+          setCorrectCount(savedSession.correctCount || 0);
+          setIncorrectCount(savedSession.incorrectCount || 0);
+          setActiveGameMode(resumedGameMode);
+          setActiveTimeLimit(resumedLimit);
+          setSessionId(
+            savedSession.sessionId ||
+              `gsess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+          );
+          const nowMs = Date.now();
+          setStartedAtEpochMs(savedSession.startedAtEpochMs || nowMs);
+          if (resumedGameMode === 'time-attack') {
+            const deadline =
+              savedSession.endsAtEpochMs || nowMs + resumedLimit * 1000;
+            setEndsAtEpochMs(deadline);
+            setRemainingSeconds(getRemainingTimeAttackSeconds(deadline, nowMs));
+          } else {
+            setEndsAtEpochMs(undefined);
+          }
+          return;
+        }
       }
+    }
+
+    // Fresh session initialization
+    const freshSessionId = `gsess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const nowMs = Date.now();
+    setSessionId(freshSessionId);
+    setScore(0);
+    setCorrectCount(0);
+    setIncorrectCount(0);
+    setCompletedCount(0);
+    setActiveGameMode(propGameMode);
+    setActiveTimeLimit(propTimeLimitSeconds);
+    setStartedAtEpochMs(nowMs);
+    if (propGameMode === 'time-attack' && mode !== 'practice' && mode !== 'first-time') {
+      const deadline = nowMs + propTimeLimitSeconds * 1000;
+      setEndsAtEpochMs(deadline);
+      setRemainingSeconds(propTimeLimitSeconds);
+    } else {
+      setEndsAtEpochMs(undefined);
     }
 
     if (mode === 'first-time') {
@@ -211,7 +363,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
       setQueue(sliced);
       setCurrentIndex(0);
       setStage('statement');
-      setCompletedCount(0);
       return;
     }
 
@@ -223,43 +374,35 @@ export const StudySession: React.FC<StudySessionProps> = ({
           : [...activeCards];
       setQueue(practiceQueue);
       setCurrentIndex(0);
-      setStage(mode === 'drill' ? 'cloze' : 'statement');
-      setCompletedCount(0);
-      return;
-    }
-
-    if (mode === 'interleaved') {
-      const shuffled = [...activeCards].sort(() => Math.random() - 0.5);
-      setQueue(shuffled.slice(0, settings.dailyReviewCap));
-      setCurrentIndex(0);
       setStage('statement');
-      setCompletedCount(0);
       return;
     }
 
     if (mode === 'due-continuous') {
-      const sortedDue = sortDueCardsMostOverdueFirst(activeCards).slice(
-        0,
-        settings.dailyReviewCap
-      );
-      const safeStart = Math.min(Math.max(0, initialCardIndex), Math.max(0, sortedDue.length - 1));
+      // If deck is the unified review pool, cards passed in are already priority-shuffled by buildUnifiedReviewQueue
+      const baseDue =
+        deck.id === '__due_today__'
+          ? activeCards.slice(0, settings.dailyReviewCap)
+          : sortDueCardsMostOverdueFirst(activeCards).slice(0, settings.dailyReviewCap);
+      const safeStart = Math.min(Math.max(0, initialCardIndex), Math.max(0, baseDue.length - 1));
       const dueQueue =
         safeStart > 0
-          ? [...sortedDue.slice(safeStart), ...sortedDue.slice(0, safeStart)]
-          : sortedDue;
+          ? [...baseDue.slice(safeStart), ...baseDue.slice(0, safeStart)]
+          : baseDue;
       setQueue(dueQueue);
       setCurrentIndex(0);
       setStage('statement');
-      setCompletedCount(0);
       return;
     }
 
-    // Standard 'recall' mode: sort overdue cards most-overdue first and cap at dailyReviewCap
-    const dueCards = sortDueCardsMostOverdueFirst(
-      activeCards.filter(c => isCardDueToday(c, new Date(), settings))
-    ).slice(0, settings.dailyReviewCap);
-
-    const baseQueue = dueCards.length > 0 ? dueCards : [...activeCards];
+    // Standard 'recall' mode: use unified priority queue for eligible due + quota new cards
+    const unifiedEligible = buildUnifiedReviewQueue(
+      activeCards,
+      allDecks,
+      settings,
+      new Date()
+    );
+    const baseQueue = unifiedEligible.length > 0 ? unifiedEligible : [...activeCards];
     const safeStart = Math.min(Math.max(0, initialCardIndex), baseQueue.length - 1);
     const orderedQueue =
       safeStart > 0
@@ -269,11 +412,85 @@ export const StudySession: React.FC<StudySessionProps> = ({
     setQueue(orderedQueue);
     setCurrentIndex(0);
     setStage('statement');
-    setCompletedCount(0);
-  }, [deck.id, cards.length, resumeFromSession, initialCardIndex, mode]);
+  }, [
+    deck.id,
+    cards.length,
+    resumeFromSession,
+    initialCardIndex,
+    mode,
+    propGameMode,
+    propTimeLimitSeconds,
+  ]);
+
+  // Wall-clock Time Attack countdown effect (survives background tabs & refreshes without drift)
+  useEffect(() => {
+    if (
+      activeGameMode !== 'time-attack' ||
+      !endsAtEpochMs ||
+      sessionFinished ||
+      queue.length === 0 ||
+      mode === 'practice' ||
+      mode === 'first-time'
+    ) {
+      return;
+    }
+
+    const tick = () => {
+      const rem = getRemainingTimeAttackSeconds(endsAtEpochMs, Date.now());
+      setRemainingSeconds(rem);
+      if (rem <= 0) {
+        // End session cleanly without rating the unanswered card or altering its SRS schedule
+        finalizeGameSession({
+          finalScore: score,
+          finalCompleted: completedCount,
+          finalCorrect: correctCount,
+          finalIncorrect: incorrectCount,
+          expiredByTimer: true,
+        });
+      }
+    };
+
+    tick();
+    const intervalId = window.setInterval(tick, 250);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        tick();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, [
+    activeGameMode,
+    endsAtEpochMs,
+    sessionFinished,
+    queue.length,
+    mode,
+    score,
+    completedCount,
+    correctCount,
+    incorrectCount,
+    finalizeGameSession,
+  ]);
 
   const currentCard = queue[currentIndex];
   const nextCard = queue[currentIndex + 1];
+
+  // Total cards in this session (preserved across resumptions and adjusted if cards are deleted/suspended)
+  const totalCardsInSession = useMemo(
+    () => completedCount + Math.max(0, queue.length - currentIndex),
+    [completedCount, queue.length, currentIndex]
+  );
+
+  const roundProgress = useMemo(
+    () => computeRoundProgress(completedCount, totalCardsInSession, 5),
+    [completedCount, totalCardsInSession]
+  );
 
   // Requirement 5.24: Preload the next card's formula render while the current card is shown
   useEffect(() => {
@@ -294,28 +511,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
     return found ? found.name : deck.name;
   }, [currentCard, allDecks, deck.name]);
 
-  // Peer cards for smarter cloze and interleaved distractors (2.7 & 2.8)
-  const peerCardsForCurrent = useMemo(() => {
-    if (!currentCard) return cards;
-    const pool = allCards.length > 0 ? allCards : cards;
-    const sameDeck = pool.filter(c => c.deckId === currentCard.deckId);
-    return sameDeck.length >= 3 ? sameDeck : pool;
-  }, [currentCard, cards, allCards]);
-
-  const clozeData = useMemo(() => {
-    if (!currentCard) return null;
-    return generateFormulaCloze(
-      currentCard.formula,
-      peerCardsForCurrent,
-      currentCard.category
-    );
-  }, [currentCard?.id, currentCard?.formula, peerCardsForCurrent]);
-
-  const interleavedOptions = useMemo(() => {
-    if (!currentCard || mode !== 'interleaved') return [];
-    return generateInterleavedFormulaOptions(currentCard, peerCardsForCurrent, 4);
-  }, [currentCard?.id, currentCard?.formula, mode, peerCardsForCurrent]);
-
   const ratingPreviews = useMemo(() => {
     if (!currentCard) return null;
     return previewRatingIntervals(currentCard, {
@@ -324,7 +519,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
     });
   }, [currentCard, settings.maxIntervalDays, settings.examDate]);
 
-  // Save session progress whenever card or stage changes (except in practice / drill mode)
+  // Save session progress whenever card, round, or score changes (except in practice / drill mode)
   useEffect(() => {
     if (
       !currentCard ||
@@ -344,16 +539,42 @@ export const StudySession: React.FC<StudySessionProps> = ({
         lastCardIndex: currentIndex,
         stage,
         remainingQueueIds: remainingIds,
-        totalInSession: queue.length,
+        totalInSession: totalCardsInSession,
         completedInSession: completedCount,
         lastStudiedAt: new Date().toISOString(),
         mode,
+        sessionId,
+        gameMode: activeGameMode,
+        score,
+        correctCount,
+        incorrectCount,
+        timeLimitSeconds: activeGameMode === 'time-attack' ? activeTimeLimit : undefined,
+        startedAtEpochMs,
+        endsAtEpochMs,
       },
       mode
     );
-  }, [currentIndex, stage, currentCard?.id, sessionFinished, mode]);
+  }, [
+    currentIndex,
+    stage,
+    currentCard?.id,
+    sessionFinished,
+    mode,
+    deck.id,
+    queue,
+    totalCardsInSession,
+    completedCount,
+    sessionId,
+    activeGameMode,
+    score,
+    correctCount,
+    incorrectCount,
+    activeTimeLimit,
+    startedAtEpochMs,
+    endsAtEpochMs,
+  ]);
 
-  // Keyboard shortcuts for rapid study (Bug 1.3 fixed: 'f' / '0' allowed ONLY in 'first-time' mode)
+  // Keyboard shortcuts for rapid study (Again = 1, Good = 2 or 3, Easy = 4; Hard removed)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (sessionFinished || !currentCard || leechActionMode !== 'none' || isMoreMenuOpen) return;
@@ -382,7 +603,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
           handleRateCard('first-time');
         }
       } else if (mode === 'first-time' && (e.key === 'f' || e.key === 'F' || e.key === '0')) {
-        // Bug 1.3: Only allow 'f' and '0' to trigger 'first-time' when in 'first-time' mode
         e.preventDefault();
         if (isRevealed) {
           handleRateCard('first-time');
@@ -391,8 +611,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
         }
       } else if (isRevealed && mode !== 'first-time' && mode !== 'practice') {
         if (e.key === '1') handleRateCard('again');
-        if (e.key === '2') handleRateCard('hard');
-        if (e.key === '3') handleRateCard('good');
+        if (e.key === '2' || e.key === '3') handleRateCard('good');
         if (e.key === '4') handleRateCard('easy');
       }
     };
@@ -433,42 +652,62 @@ export const StudySession: React.FC<StudySessionProps> = ({
 
   const resetCardInteractionState = () => {
     setIsRevealed(false);
-    setIsDoubtMode(false);
-    setSelectedClozeOption(null);
-    setSelectedInterleavedOption(null);
     setConfirmDeleteCurrent(false);
     setLeechActionMode('none');
   };
 
   const handlePracticeNext = () => {
     triggerHapticTick();
+    const nextCompleted = completedCount + 1;
+    const nextRoundInfo = computeRoundProgress(nextCompleted, totalCardsInSession, 5);
+    if (nextRoundInfo.justCompletedRound !== null) {
+      showRoundCompletionPopup(nextRoundInfo.justCompletedRound, score);
+    }
+
     if (currentIndex + 1 < queue.length) {
       setCurrentIndex(prev => prev + 1);
-      setCompletedCount(prev => prev + 1);
+      setCompletedCount(nextCompleted);
       resetCardInteractionState();
     } else {
+      setCompletedCount(nextCompleted);
       markFirstSessionCompleted();
       setSessionFinished(true);
     }
   };
 
   const handleRateCard = async (rating: SrsRating, viaSwipe = false) => {
-    if (!currentCard) return;
+    if (!currentCard || sessionFinished) return;
 
-    // Bug 1.3 guard: prevent 'first-time' rating outside of first-time mode
+    // Guard: prevent 'first-time' rating outside of first-time mode
     if (rating === 'first-time' && mode !== 'first-time') {
       return;
     }
 
-    // Bug 1.4 guard: Practice mode never writes SRS fields
+    // Guard: Practice mode never writes SRS fields
     if (mode === 'practice') {
       handlePracticeNext();
       return;
     }
 
+    // If Time Attack timer already expired right as user tapped, end cleanly without rating
+    if (
+      activeGameMode === 'time-attack' &&
+      endsAtEpochMs &&
+      getRemainingTimeAttackSeconds(endsAtEpochMs, Date.now()) <= 0
+    ) {
+      finalizeGameSession({
+        finalScore: score,
+        finalCompleted: completedCount,
+        finalCorrect: correctCount,
+        finalIncorrect: incorrectCount,
+        expiredByTimer: true,
+      });
+      return;
+    }
+
     triggerHapticTick();
 
-    // Feature 2.1: Calculate spreadDayOffset if in 'first-time' mode and over today's new card quota
+    // Calculate spreadDayOffset if in 'first-time' mode and over today's new card quota
     let spreadDayOffset = 1;
     if (rating === 'first-time') {
       sessionNewIntroducedRef.current += 1;
@@ -480,6 +719,15 @@ export const StudySession: React.FC<StudySessionProps> = ({
         spreadDayOffset = 1 + Math.ceil((overQuotaIndex + 1) / dailyLimit);
       }
     }
+
+    // Learned-only scoring: +3 for Good/Easy and -1 for Again ONLY when testing a formula already learned
+    const scoreDeltaInfo = calculateRatingScoreDelta(currentCard, rating);
+    const nextScore = score + scoreDeltaInfo.pointsDelta;
+    const nextCorrect =
+      correctCount + (scoreDeltaInfo.isRecallTrial && scoreDeltaInfo.isCorrectRecall ? 1 : 0);
+    const nextIncorrect =
+      incorrectCount + (scoreDeltaInfo.isRecallTrial && !scoreDeltaInfo.isCorrectRecall ? 1 : 0);
+    const nextCompleted = completedCount + 1;
 
     const prevInterval = currentCard.intervalDays;
     const elapsedMs = Math.max(100, Date.now() - cardStartTimeRef.current);
@@ -519,12 +767,15 @@ export const StudySession: React.FC<StudySessionProps> = ({
       ms: elapsedMs,
     });
 
-    // Save single-level undo snapshot (2.6)
+    // Save single-level undo snapshot including score and accuracy before rating
     setUndoSnapshot({
       cardBeforeRating: { ...currentCard },
       queueBeforeRating: [...queue],
       indexBeforeRating: currentIndex,
       completedBeforeRating: completedCount,
+      scoreBeforeRating: score,
+      correctBeforeRating: correctCount,
+      incorrectBeforeRating: incorrectCount,
       reviewLogId: logEntry.id,
       ratingLabel: rating === 'first-time' ? 'Learn' : rating.toUpperCase(),
     });
@@ -536,17 +787,31 @@ export const StudySession: React.FC<StudySessionProps> = ({
     updateCardInStorage(updatedCard);
     markFirstSessionCompleted();
 
+    setScore(nextScore);
+    setCorrectCount(nextCorrect);
+    setIncorrectCount(nextIncorrect);
+    setCompletedCount(nextCompleted);
+
     const updatedQueue = [...queue];
     updatedQueue[currentIndex] = updatedCard;
     setQueue(updatedQueue);
 
+    const nextRoundInfo = computeRoundProgress(nextCompleted, totalCardsInSession, 5);
+    if (nextRoundInfo.justCompletedRound !== null) {
+      showRoundCompletionPopup(nextRoundInfo.justCompletedRound, nextScore);
+    }
+
     if (currentIndex + 1 < queue.length) {
       setCurrentIndex(prev => prev + 1);
-      setCompletedCount(prev => prev + 1);
       resetCardInteractionState();
     } else {
-      clearDeckSessionState(deck.id, mode);
-      setSessionFinished(true);
+      finalizeGameSession({
+        finalScore: nextScore,
+        finalCompleted: nextCompleted,
+        finalCorrect: nextCorrect,
+        finalIncorrect: nextIncorrect,
+        expiredByTimer: false,
+      });
     }
   };
 
@@ -557,6 +822,9 @@ export const StudySession: React.FC<StudySessionProps> = ({
       queueBeforeRating,
       indexBeforeRating,
       completedBeforeRating,
+      scoreBeforeRating,
+      correctBeforeRating,
+      incorrectBeforeRating,
       reviewLogId,
     } = undoSnapshot;
 
@@ -565,10 +833,16 @@ export const StudySession: React.FC<StudySessionProps> = ({
       await removeReviewLogById(reviewLogId);
     }
 
+    hasEndedSessionRef.current = false;
     setQueue(queueBeforeRating);
     setCurrentIndex(indexBeforeRating);
     setCompletedCount(completedBeforeRating);
+    setScore(scoreBeforeRating);
+    setCorrectCount(correctBeforeRating);
+    setIncorrectCount(incorrectBeforeRating);
+    setCompletedRoundModal(null);
     setSessionFinished(false);
+    setTimeExpired(false);
     setUndoSnapshot(null);
     setUndoToastVisible(false);
     resetCardInteractionState();
@@ -630,15 +904,16 @@ export const StudySession: React.FC<StudySessionProps> = ({
     setIsMoreMenuOpen(false);
 
     const nextQueue = queue.filter(c => c.id !== currentCard.id);
-    if (nextQueue.length === 0) {
-      clearDeckSessionState(deck.id, mode);
-      onExit();
+    if (nextQueue.length === 0 || currentIndex >= nextQueue.length) {
+      finalizeGameSession({
+        finalScore: score,
+        finalCompleted: completedCount,
+        finalCorrect: correctCount,
+        finalIncorrect: incorrectCount,
+      });
       return;
     }
     setQueue(nextQueue);
-    if (currentIndex >= nextQueue.length) {
-      setCurrentIndex(nextQueue.length - 1);
-    }
     resetCardInteractionState();
   };
 
@@ -709,16 +984,17 @@ export const StudySession: React.FC<StudySessionProps> = ({
     setConfirmDeleteCurrent(false);
     setIsMoreMenuOpen(false);
 
-    if (nextQueue.length === 0) {
-      clearDeckSessionState(deck.id, mode);
-      onExit();
+    if (nextQueue.length === 0 || currentIndex >= nextQueue.length) {
+      finalizeGameSession({
+        finalScore: score,
+        finalCompleted: completedCount,
+        finalCorrect: correctCount,
+        finalIncorrect: incorrectCount,
+      });
       return;
     }
 
     setQueue(nextQueue);
-    if (currentIndex >= nextQueue.length) {
-      setCurrentIndex(nextQueue.length - 1);
-    }
     resetCardInteractionState();
   };
 
@@ -743,126 +1019,186 @@ export const StudySession: React.FC<StudySessionProps> = ({
   }
 
   if (sessionFinished) {
+    const gameStats = getGameAnalyticsState();
+    const modePersonalBest =
+      activeGameMode === 'time-attack'
+        ? gameStats.timeAttackBests[activeTimeLimit]
+        : gameStats.classicBest;
+    const recallTotal = correctCount + incorrectCount;
+    const accuracyPct =
+      recallTotal > 0 ? Math.round((correctCount / recallTotal) * 100) : null;
+
     return (
-      <div className="max-w-md mx-auto my-12 p-6 glass-card rounded-2xl text-center space-y-5">
-        <div className="w-11 h-11 rounded-full bg-black dark:bg-white text-white dark:text-black flex items-center justify-center mx-auto">
-          <CheckCircle2 className="w-6 h-6" />
-        </div>
-        <div className="space-y-1.5">
-          <h2 className="text-lg font-bold">
-            {shiftedToTomorrowCount !== null
-              ? 'Shifted to Tomorrow'
-              : mode === 'first-time'
-              ? 'Learn Session Complete'
-              : mode === 'practice'
-              ? 'Practice Complete'
-              : mode === 'drill'
-              ? 'Drill Complete'
-              : 'Session Complete'}
-          </h2>
-          <p className="text-[13px] text-secondary-contrast">
-            {shiftedToTomorrowCount !== null ? (
-              <>
-                Moved <span className="font-bold">{shiftedToTomorrowCount}</span> remaining due{' '}
-                {shiftedToTomorrowCount === 1 ? 'card' : 'cards'} to Tomorrow’s schedule.
-              </>
-            ) : mode === 'practice' ? (
-              <>
-                Practiced <span className="font-bold">{queue.length}</span> formulas without
-                altering your SRS schedule.
-              </>
-            ) : (
-              <>
-                Reviewed <span className="font-bold">{queue.length}</span> cards in {deck.name}.
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 pt-1">
-          {undoSnapshot && shiftedToTomorrowCount === null && (
-            <button
-              onClick={handleUndoLastRating}
-              className="glass-button min-h-[44px] rounded-xl text-[13px] font-semibold flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Undo2 className="w-4 h-4" />
-              <span>Undo Last Rating</span>
-            </button>
+      <div className="max-w-md mx-auto my-10 px-4">
+        <div className="p-6 glass-card rounded-2xl text-center space-y-5">
+          <div className="w-11 h-11 rounded-full bg-black dark:bg-white text-white dark:text-black flex items-center justify-center mx-auto">
+            {timeExpired ? <Timer className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold">
+              {shiftedToTomorrowCount !== null
+                ? 'Shifted to Tomorrow'
+                : timeExpired
+                ? `Time’s Up (${activeTimeLimit / 60} min)`
+                : mode === 'first-time'
+                ? 'Learn Session Complete'
+                : mode === 'practice'
+                ? 'Practice Complete'
+                : mode === 'drill'
+                ? 'Drill Complete'
+                : activeGameMode === 'time-attack'
+                ? 'Time Attack Complete'
+                : 'Session Complete'}
+            </h2>
+            <p className="text-[13px] text-secondary-contrast">
+              {shiftedToTomorrowCount !== null ? (
+                <>
+                  Moved <span className="font-bold">{shiftedToTomorrowCount}</span> remaining due{' '}
+                  {shiftedToTomorrowCount === 1 ? 'card' : 'cards'} to Tomorrow’s schedule.
+                </>
+              ) : mode === 'practice' ? (
+                <>
+                  Practiced <span className="font-bold">{completedCount}</span> formulas without
+                  altering your SRS schedule.
+                </>
+              ) : (
+                <>
+                  Completed <span className="font-bold">{completedCount}</span>{' '}
+                  {completedCount === 1 ? 'card' : 'cards'} across{' '}
+                  <span className="font-bold">{Math.floor(completedCount / 5)}</span> full{' '}
+                  {Math.floor(completedCount / 5) === 1 ? 'round' : 'rounds'}.
+                </>
+              )}
+            </p>
+          </div>
+
+          {shiftedToTomorrowCount === null && mode !== 'practice' && mode !== 'first-time' && (
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-3 rounded-xl glass-panel">
+                  <div className="text-xs font-bold uppercase text-secondary-contrast">Score</div>
+                  <div className="text-lg font-extrabold tabular-nums">
+                    {score > 0 ? `+${score}` : score}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl glass-panel">
+                  <div className="text-xs font-bold uppercase text-secondary-contrast">Cards</div>
+                  <div className="text-lg font-extrabold tabular-nums">{completedCount}</div>
+                </div>
+                <div className="p-3 rounded-xl glass-panel">
+                  <div className="text-xs font-bold uppercase text-secondary-contrast">Recall</div>
+                  <div className="text-lg font-extrabold tabular-nums">
+                    {accuracyPct !== null ? `${accuracyPct}%` : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {modePersonalBest && (
+                <div className="p-3 rounded-xl glass-panel flex items-center justify-between text-xs">
+                  <span className="font-semibold flex items-center gap-1.5 text-secondary-contrast">
+                    <Trophy className="w-3.5 h-3.5" />
+                    <span>
+                      {activeGameMode === 'time-attack'
+                        ? `Time Attack (${activeTimeLimit / 60}m) Personal Best`
+                        : 'Classic Mode Personal Best'}
+                    </span>
+                  </span>
+                  <span className="font-bold tabular-nums">
+                    {modePersonalBest.bestScore > 0
+                      ? `+${modePersonalBest.bestScore}`
+                      : modePersonalBest.bestScore}{' '}
+                    pts · {modePersonalBest.mostCardsCompleted} cards
+                    {isNewPersonalBest ? ' (New!)' : ''}
+                  </span>
+                </div>
+              )}
+            </div>
           )}
-          <button
-            onClick={() => {
-              setShiftedToTomorrowCount(null);
-              setCurrentIndex(0);
-              setCompletedCount(0);
-              setIsRevealed(false);
-              setSessionFinished(false);
-            }}
-            className="glass-button min-h-[48px] rounded-xl text-[15px] font-semibold cursor-pointer"
-          >
-            Review Again
-          </button>
-          <button
-            onClick={onExit}
-            className="glass-button-primary min-h-[48px] rounded-xl text-[15px] font-bold cursor-pointer"
-          >
-            Done
-          </button>
+
+          <div className="flex flex-col gap-2 pt-1">
+            {undoSnapshot && shiftedToTomorrowCount === null && !timeExpired && (
+              <button
+                onClick={handleUndoLastRating}
+                className="glass-button min-h-[44px] rounded-xl text-[13px] font-semibold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Undo2 className="w-4 h-4" />
+                <span>Undo Last Rating</span>
+              </button>
+            )}
+            <button
+              onClick={onExit}
+              className="glass-button-primary min-h-[48px] rounded-xl text-[15px] font-bold cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  const progressPercent = Math.round(((currentIndex + 1) / queue.length) * 100);
   const currentIsLeech = isCardLeech(currentCard);
   const currentIsStable = isCardStable(currentCard, settings);
   const cardDerivation = currentCard.derivation || currentCard.derivationSummary;
 
   return (
     <div className="min-h-dvh w-full max-w-xl landscape:max-w-4xl mx-auto flex flex-col pt-safe pl-safe pr-safe">
-      {/* Header (5.9): Sticky top bar with Back arrow, progress bar ("12 / 40"), visible Undo button, "⋯" menu */}
+      {/* Header: Sticky top bar with Back, 5-Card Round & Overall Progress, Score, Timer, Undo, and "⋯" menu */}
       <header className="sticky top-0 z-20 glass-chrome border-b px-4 pt-2.5 pb-2 space-y-2 shrink-0">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={onExit}
-            aria-label="Back to decks"
+            aria-label="Back to review home"
             className="glass-button min-h-[44px] min-w-[44px] px-3 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
             <span className="hidden sm:inline">Back</span>
           </button>
 
-          {/* Progress counter + bar */}
+          {/* Round Indicator & Round Progress Bar */}
           <div className="flex-1 min-w-0 px-2 text-center space-y-1">
-            <div className="flex items-center justify-center gap-1.5 text-[13px] font-bold tabular-nums">
-              <span>
-                {currentIndex + 1} / {queue.length}
-              </span>
-              {mode === 'first-time' && (
-                <span className="text-xs font-normal text-secondary-contrast">
-                  · {deckQuotaInfo.availableToday} new today
+            <div className="flex items-center justify-center gap-2 text-xs sm:text-[13px] font-bold tabular-nums flex-wrap">
+              <span>Round {roundProgress.currentRound}</span>
+
+              {mode !== 'practice' && mode !== 'first-time' && (
+                <span className="px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/10 font-mono text-xs">
+                  {score > 0 ? `+${score}` : score} pts
                 </span>
               )}
-              {mode === 'practice' && (
-                <span className="text-xs font-normal text-secondary-contrast">
-                  · Practice
-                </span>
-              )}
-              {mode === 'drill' && (
-                <span className="text-xs font-normal text-secondary-contrast">
-                  · Drill
+
+              {activeGameMode === 'time-attack' && endsAtEpochMs && (
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-mono text-xs ${
+                    remainingSeconds <= 30
+                      ? 'bg-black text-white dark:bg-white dark:text-black'
+                      : 'bg-black/5 dark:bg-white/10'
+                  }`}
+                >
+                  <Timer className="w-3 h-3 shrink-0" />
+                  <span>{formatCountdownMmSs(remainingSeconds)}</span>
                 </span>
               )}
             </div>
-            <div className="w-full h-1.5 bg-black/10 dark:bg-white/15 rounded-full overflow-hidden">
+
+            <div
+              className="w-full h-1.5 bg-black/10 dark:bg-white/15 rounded-full overflow-hidden"
+              role="progressbar"
+              aria-label={`Round ${roundProgress.currentRound} progress`}
+              aria-valuenow={roundProgress.roundPercent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
               <div
                 className="h-full bg-black dark:bg-white transition-all duration-150"
-                style={{ width: `${progressPercent}%` }}
+                style={{ width: `${roundProgress.roundPercent}%` }}
               />
             </div>
           </div>
 
-          {/* Right controls: Visible Undo button + "⋯" Menu (Delete is never next to Draw) */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Right controls: Visible Undo button + "⋯" Menu */}
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={handleUndoLastRating}
@@ -872,21 +1208,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
               className="glass-button min-h-[44px] min-w-[44px] px-2.5 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1 disabled:opacity-35 cursor-pointer"
             >
               <Undo2 className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsDoubtMode(prev => !prev)}
-              aria-label="Circle your doubt"
-              title="Circle your doubt (AI Assistant)"
-              className={`glass-button min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
-                isDoubtMode
-                  ? 'bg-blue-600 text-white shadow-sm border-blue-500'
-                  : 'text-blue-600 dark:text-blue-400'
-              }`}
-            >
-              <Sparkles className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Circle Doubt</span>
             </button>
 
             <button
@@ -903,6 +1224,64 @@ export const StudySession: React.FC<StudySessionProps> = ({
           </div>
         </div>
       </header>
+
+      {/* Celebratory Congratulatory Pop Up Modal after each 5-card round */}
+      {completedRoundModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="round-complete-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+        >
+          <div className="glass-card max-w-sm w-full rounded-3xl p-6 text-center space-y-5 border shadow-2xl relative">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center shadow-inner">
+              <Trophy className="w-8 h-8" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 id="round-complete-title" className="text-xl font-bold tracking-tight">
+                Round {completedRoundModal.roundNumber} Complete!
+              </h2>
+              <p className="text-[13px] text-secondary-contrast leading-relaxed">
+                {completedRoundModal.roundNumber === 1
+                  ? "Great job! First round in the books — keep up the fantastic momentum!"
+                  : `Terrific focus! You have conquered ${completedRoundModal.roundNumber * 5} formulas so far.`}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 p-3 rounded-2xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 text-center">
+              <div>
+                <div className="text-[11px] font-medium text-secondary-contrast uppercase tracking-wider">
+                  Score
+                </div>
+                <div className="text-lg font-bold tabular-nums mt-0.5">
+                  {completedRoundModal.scoreAtRound > 0
+                    ? `+${completedRoundModal.scoreAtRound}`
+                    : completedRoundModal.scoreAtRound}{' '}
+                  pts
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-secondary-contrast uppercase tracking-wider">
+                  Formulas
+                </div>
+                <div className="text-lg font-bold tabular-nums mt-0.5">
+                  {completedRoundModal.roundNumber * 5}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              autoFocus
+              onClick={handleDismissRoundModal}
+              className="glass-button-primary w-full min-h-[50px] rounded-xl text-[15px] font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
+            >
+              <span>Continue to Round {completedRoundModal.roundNumber + 1}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area: Natural mobile vertical scroll; Portrait = stacked; Landscape (5.19) = side-by-side */}
       <div className="flex-1 flex flex-col landscape:flex-row landscape:items-start landscape:gap-4 px-4 pt-3 pb-36 landscape:pb-6">
@@ -1075,138 +1454,36 @@ export const StudySession: React.FC<StudySessionProps> = ({
               )}
             </div>
 
-            {/* INTERLEAVED MODE PROMPT: "Which formula applies?" (2.7) */}
-            {mode === 'interleaved' ? (
-              <div className="space-y-4 my-auto">
-                <div className="space-y-1.5">
-                  <span className="text-xs font-bold uppercase tracking-wider text-secondary-contrast block">
-                    Which formula applies?
-                  </span>
-                  <h2 className="text-[17px] font-semibold leading-relaxed break-words">
-                    {formatStatementText(currentCard.statement)}
-                  </h2>
-                </div>
+            {/* Standard Flow: Statement -> Reveal -> Formula + Variables -> Rate */}
+            <div className="space-y-5 my-auto">
+              <h2 className="text-[17px] sm:text-lg font-semibold leading-relaxed break-words">
+                {formatStatementText(currentCard.statement)}
+              </h2>
 
-                <div className="grid grid-cols-1 gap-2 pt-1">
-                  {interleavedOptions.map((opt, idx) => {
-                    const isCorrect = opt === currentCard.formula;
-                    const isChosen = selectedInterleavedOption === opt;
-                    let btnStyle = 'glass-button';
-                    if (selectedInterleavedOption) {
-                      if (isCorrect) {
-                        btnStyle = 'glass-button-primary font-bold';
-                      } else if (isChosen) {
-                        btnStyle = 'opacity-50 line-through border border-black/20';
-                      }
-                    }
-                    return (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => {
-                          setSelectedInterleavedOption(opt);
-                          setIsRevealed(true);
-                        }}
-                        className={`min-h-[48px] p-3 rounded-xl transition-all cursor-pointer text-center overflow-x-auto ${btnStyle}`}
-                      >
-                        <FormulaDisplay formula={opt} displayMode={false} size="sm" />
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {isRevealed && (
-                  <CardPostRevealDetails card={currentCard} derivation={cardDerivation} />
-                )}
-              </div>
-            ) : mode === 'drill' && clozeData ? (
-              /* SEPARATE DRILL MODE: Cloze / MCQ (5.7) */
-              <div className="space-y-4 my-auto">
-                <p className="text-[15px] font-medium leading-relaxed break-words">
-                  {formatStatementText(currentCard.statement)}
-                </p>
-
-                <div className="p-4 rounded-xl bg-white/90 dark:bg-zinc-900/90 border border-black/10 dark:border-white/10 text-center">
-                  <FormulaDisplay
-                    formula={isRevealed ? currentCard.formula : clozeData.maskedFormula}
-                    size="lg"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  {clozeData.options.slice(0, 4).map((opt, idx) => {
-                    const isCorrect = opt === clozeData.hiddenTerm;
-                    const isChosen = selectedClozeOption === opt;
-
-                    let btnStyle = 'glass-button';
-                    if (selectedClozeOption) {
-                      if (isCorrect) {
-                        btnStyle = 'glass-button-primary font-bold';
-                      } else if (isChosen && !isCorrect) {
-                        btnStyle = 'opacity-50 line-through border border-black/20';
-                      }
-                    }
-
-                    return (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => {
-                          setSelectedClozeOption(opt);
-                          setIsRevealed(true);
-                        }}
-                        className={`min-h-[48px] p-3 rounded-xl transition-all cursor-pointer flex items-center justify-center ${btnStyle}`}
-                      >
-                        <FormulaDisplay formula={opt} displayMode={false} size="sm" />
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {isRevealed && (
-                  <CardPostRevealDetails card={currentCard} derivation={cardDerivation} />
-                )}
-              </div>
-            ) : (
-              /* STANDARD FLOW (5.7): statement -> tap anywhere to reveal -> formula + variables -> rate */
-              <div className="space-y-5 my-auto">
-                <h2 className="text-[17px] sm:text-lg font-semibold leading-relaxed break-words">
-                  {formatStatementText(currentCard.statement)}
-                </h2>
-
-                {isDoubtMode ? (
-                  <DoubtAssistant
-                    deckTitle={currentCardDeckName}
-                    card={currentCard}
-                    allDeckCards={cards}
-                    isRevealed={isRevealed}
-                    onClose={() => setIsDoubtMode(false)}
-                  />
-                ) : isRevealed ? (
-                  <div className="pt-4 border-t border-black/10 dark:border-white/10 space-y-4">
-                    <div className="p-4 rounded-xl bg-white/95 dark:bg-zinc-900/95 border border-black/10 dark:border-white/10 text-center">
-                      <FormulaDisplay formula={currentCard.formula} size="lg" />
-                    </div>
-
-                    <CardPostRevealDetails card={currentCard} derivation={cardDerivation} />
+              {isRevealed ? (
+                <div className="pt-4 border-t border-black/10 dark:border-white/10 space-y-4">
+                  <div className="p-4 rounded-xl bg-white/95 dark:bg-zinc-900/95 border border-black/10 dark:border-white/10 text-center">
+                    <FormulaDisplay formula={currentCard.formula} size="lg" />
                   </div>
-                ) : (
-                  <div className="pt-8 text-center">
-                    <button
-                      type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        setIsRevealed(true);
-                      }}
-                      className="glass-button w-full min-h-[52px] rounded-xl text-[15px] font-bold flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <Eye className="w-4 h-4" />
-                      <span>Tap anywhere to reveal formula</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+
+                  <CardPostRevealDetails card={currentCard} derivation={cardDerivation} />
+                </div>
+              ) : (
+                <div className="pt-8 text-center">
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setIsRevealed(true);
+                    }}
+                    className="glass-button w-full min-h-[52px] rounded-xl text-[15px] font-bold flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>Tap anywhere to reveal formula</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div />
           </div>
@@ -1218,21 +1495,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
         {/* Fixed Bottom Rating Bar in Portrait / Side-by-Side in Landscape (5.8 & 5.19) */}
         <div className="fixed bottom-0 left-0 right-0 z-30 glass-chrome border-t px-4 pt-2.5 pb-safe pl-safe pr-safe landscape:static landscape:w-64 landscape:border landscape:rounded-2xl landscape:p-3 landscape:flex landscape:flex-col landscape:justify-center shrink-0">
           <div className="max-w-xl mx-auto w-full">
-            {isDoubtMode ? (
-              <div className="flex items-center justify-between gap-3 py-1">
-                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400">
-                  <Sparkles className="w-4 h-4 animate-pulse" />
-                  <span>AI Formula Tutor Active · Ask your doubt above</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsDoubtMode(false)}
-                  className="glass-button min-h-[44px] px-3.5 rounded-xl text-xs font-bold cursor-pointer"
-                >
-                  Return to Card
-                </button>
-              </div>
-            ) : isRevealed ? (
+            {isRevealed ? (
               mode === 'practice' ? (
                 <button
                   type="button"
@@ -1256,8 +1519,8 @@ export const StudySession: React.FC<StudySessionProps> = ({
                   </span>
                 </button>
               ) : ratingPreviews ? (
-                /* 4 Equal Rating Buttons (5.8): min-h-[56px], next interval shown, distinguishable without relying on color alone */
-                <div className="grid grid-cols-4 landscape:grid-cols-1 gap-2">
+                /* 3 Equal Rating Buttons: Again (-1 when learned), Good (+3 when learned), Easy (+3 when learned) */
+                <div className="grid grid-cols-3 landscape:grid-cols-1 gap-2">
                   <button
                     type="button"
                     onClick={() => handleRateCard('again')}
@@ -1269,20 +1532,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
                     </span>
                     <span className="text-xs font-mono text-secondary-contrast tabular-nums">
                       {ratingPreviews.again}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleRateCard('hard')}
-                    className="glass-button min-h-[56px] py-2 px-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 cursor-pointer"
-                  >
-                    <span className="text-[13px] font-bold flex items-center gap-1">
-                      <Minus className="w-3.5 h-3.5 shrink-0" />
-                      <span>Hard</span>
-                    </span>
-                    <span className="text-xs font-mono text-secondary-contrast tabular-nums">
-                      {ratingPreviews.hard}
                     </span>
                   </button>
 
@@ -1357,22 +1606,6 @@ export const StudySession: React.FC<StudySessionProps> = ({
         subtitle={currentCardDeckName}
       >
         <div className="space-y-2.5">
-          {/* Circle Your Doubt (AI Assistant) */}
-          <button
-            type="button"
-            onClick={() => {
-              setIsDoubtMode(true);
-              setIsMoreMenuOpen(false);
-            }}
-            className="glass-button w-full min-h-[48px] px-4 rounded-xl text-[15px] font-semibold flex items-center justify-between cursor-pointer text-blue-600 dark:text-blue-400 border border-blue-500/30"
-          >
-            <span className="flex items-center gap-2.5">
-              <Sparkles className="w-4 h-4 text-blue-500" />
-              <span>Circle Your Doubt</span>
-            </span>
-            <span className="text-[13px] font-bold text-blue-500">AI Assistant</span>
-          </button>
-
           {/* Draw / Scratchpad Toggle (placed at top, far away from Delete) */}
           <button
             type="button"

@@ -75,6 +75,44 @@ export interface Flashcard {
   state: CardState;
 }
 
+export type GameMode = 'classic' | 'time-attack';
+export type TimeAttackDuration = 300 | 600 | 900; // 5 min, 10 min, 15 min in seconds
+
+export interface RoundProgressInfo {
+  roundSize: number;          // 5
+  currentRound: number;       // 1-indexed
+  totalRounds: number;        // Math.max(1, Math.ceil(totalInSession / 5))
+  cardInRound: number;        // 1-indexed within current round
+  cardsInCurrentRound: number;// 5 for full rounds, or remainder (1..5) on final partial round
+  justCompletedRound: number | null; // Non-null (e.g., 3) when completedCount is an exact multiple of 5 and < totalInSession
+  overallPercent: number;     // 0..100
+  roundPercent: number;       // 0..100
+}
+
+export interface GameSessionRecord {
+  id: string;
+  mode: GameMode;
+  durationSeconds?: TimeAttackDuration;
+  score: number;
+  cardsCompleted: number;
+  correctCount: number;
+  incorrectCount: number;
+  roundsCompleted: number;
+  completedAt: string; // ISO timestamp
+}
+
+export interface PersonalBestRecord {
+  bestScore: number;
+  mostCardsCompleted: number;
+  achievedAt: string; // ISO timestamp
+}
+
+export interface GameAnalyticsState {
+  classicBest?: PersonalBestRecord;
+  timeAttackBests: Partial<Record<TimeAttackDuration, PersonalBestRecord>>;
+  recentSessions: GameSessionRecord[]; // Bounded to last 100 completed sessions
+}
+
 export interface DeckSessionState {
   lastCardId: string;
   lastCardIndex: number;
@@ -84,6 +122,14 @@ export interface DeckSessionState {
   completedInSession: number;
   lastStudiedAt: string; // ISO string
   mode?: StudySessionMode;
+  sessionId?: string;
+  gameMode?: GameMode;
+  score?: number;
+  correctCount?: number;
+  incorrectCount?: number;
+  timeLimitSeconds?: TimeAttackDuration;
+  startedAtEpochMs?: number;
+  endsAtEpochMs?: number;
 }
 
 export interface ColumnMapping {

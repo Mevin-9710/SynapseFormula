@@ -52,9 +52,11 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
   const [visibleCount, setVisibleCount] = useState(INITIAL_WINDOW_SIZE);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
+  const isUnifiedPool = deck?.id === '__all_pool__';
+
   const deckCards = useMemo(
-    () => (deck ? cards.filter(c => c.deckId === deck.id) : []),
-    [cards, deck]
+    () => (deck ? (isUnifiedPool ? cards : cards.filter(c => c.deckId === deck.id)) : []),
+    [cards, deck, isUnifiedPool]
   );
 
   const filtered = useMemo(() => {
@@ -64,6 +66,7 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
       c =>
         c.statement.toLowerCase().includes(q) ||
         c.formula.toLowerCase().includes(q) ||
+        c.category?.toLowerCase().includes(q) ||
         c.explanation?.toLowerCase().includes(q) ||
         c.conditions?.toLowerCase().includes(q)
     );
@@ -115,7 +118,7 @@ export const FormulaBrowserModal: React.FC<FormulaBrowserModalProps> = ({
         deck.sheetName ? ` · Sheet: ${deck.sheetName}` : ''
       }`}
       headerRight={
-        onDeleteDeck ? (
+        onDeleteDeck && !isUnifiedPool ? (
           <button
             type="button"
             onClick={() => setConfirmingDeleteDeck(prev => !prev)}

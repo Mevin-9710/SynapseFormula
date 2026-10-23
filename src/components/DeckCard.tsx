@@ -226,22 +226,6 @@ export const DeckCard: React.FC<DeckCardProps> = ({
             </button>
           )}
 
-          {/* Separate Drill Mode (Cloze / MCQ) (5.7) */}
-          <button
-            type="button"
-            onClick={() => {
-              setIsMenuOpen(false);
-              onStartFresh(deck, 'drill');
-            }}
-            className="glass-button w-full min-h-[48px] px-4 rounded-xl text-[15px] font-semibold flex items-center justify-between cursor-pointer"
-          >
-            <span className="flex items-center gap-2.5">
-              <Target className="w-4 h-4" />
-              <span>Drill (Cloze & MCQ)</span>
-            </span>
-            <span className="text-[13px] text-secondary-contrast">Active term recall</span>
-          </button>
-
           {/* Practice Mode (No Scheduling) (1.4 & 5.3) */}
           <button
             type="button"

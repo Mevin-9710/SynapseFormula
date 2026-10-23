@@ -11,9 +11,14 @@ import {
   LogOut,
   CloudOff,
   Cloud,
+  Plus,
+  Search,
+  HelpCircle,
+  Trash2,
+  Layers,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import { UserSettings } from '../types';
+import { Deck, Flashcard, UserSettings } from '../types';
 import {
   checkLocalStorageQuotaWarning,
   exportFullBackupJson,
@@ -26,12 +31,21 @@ import { BottomSheet } from './BottomSheet';
 interface SettingsBackupModalProps {
   isOpen: boolean;
   settings: UserSettings;
+  decks?: Deck[];
+  cards?: Flashcard[];
   user?: User | null;
   driveReconnectNeeded?: boolean;
   isSyncingAll?: boolean;
+  syncingDeckIds?: Record<string, boolean>;
   onSignIn?: () => void;
   onSignOut?: () => void;
   onSyncAll?: () => void;
+  onOpenImportModal?: () => void;
+  onOpenGuideModal?: () => void;
+  onBrowseAllPool?: () => void;
+  onBrowseDeck?: (deck: Deck) => void;
+  onRefreshDeck?: (deck: Deck) => void;
+  onDeleteDeck?: (deck: Deck) => void;
   onClose: () => void;
   onSaveSettings: (next: UserSettings) => void;
   onBackupImported: (summaryMsg: string) => void;
@@ -40,12 +54,21 @@ interface SettingsBackupModalProps {
 export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   isOpen,
   settings,
+  decks = [],
+  cards = [],
   user = null,
   driveReconnectNeeded = false,
   isSyncingAll = false,
+  syncingDeckIds = {},
   onSignIn,
   onSignOut,
   onSyncAll,
+  onOpenImportModal,
+  onOpenGuideModal,
+  onBrowseAllPool,
+  onBrowseDeck,
+  onRefreshDeck,
+  onDeleteDeck,
   onClose,
   onSaveSettings,
   onBackupImported,
@@ -66,6 +89,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'system'>(
     settings.themeMode || 'light'
   );
+  const [confirmDeleteDeckId, setConfirmDeleteDeckId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -83,6 +107,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
       );
       setReduceEffects(Boolean(settings.reduceEffects));
       setThemeMode(settings.themeMode || 'light');
+      setConfirmDeleteDeckId(null);
       setStatusMsg(null);
       setErrorMsg(null);
     }
@@ -221,6 +246,168 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
             <span>{statusMsg}</span>
           </div>
         )}
+
+        {/* Formula Pool & Imported Sheets Management */}
+        <div className="p-3.5 rounded-2xl glass-panel space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-bold uppercase tracking-wider text-secondary-contrast flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5" />
+              <span>Formula Pool & Sheets</span>
+            </div>
+            <span className="text-xs text-secondary-contrast tabular-nums">
+              {cards.filter(c => !c.suspended).length} active formulas
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {onOpenImportModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenImportModal();
+                }}
+                className="glass-button-primary min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Import Sheet / MCP</span>
+              </button>
+            )}
+
+            {onBrowseAllPool && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onBrowseAllPool();
+                }}
+                className="glass-button min-h-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Search className="w-4 h-4" />
+                <span>Browse All Formulas ({cards.length})</span>
+              </button>
+            )}
+          </div>
+
+          {onOpenGuideModal && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenGuideModal();
+              }}
+              className="glass-button w-full min-h-[44px] px-3.5 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <HelpCircle className="w-4 h-4" />
+              <span>Spreadsheet & LaTeX Format Guide</span>
+            </button>
+          )}
+
+          {decks.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-black/10 dark:border-white/10">
+              <div className="text-xs font-semibold text-secondary-contrast">
+                Imported Source Sheets ({decks.length})
+              </div>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                {decks.map(deck => {
+                  const deckCardCount = cards.filter(c => c.deckId === deck.id).length;
+                  const isSyncing = Boolean(syncingDeckIds[deck.id]);
+                  const isConfirmingDelete = confirmDeleteDeckId === deck.id;
+
+                  return (
+                    <div
+                      key={deck.id}
+                      className="p-2.5 rounded-xl bg-white/60 dark:bg-zinc-900/60 border border-black/10 dark:border-white/10 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[13px] font-bold truncate">{deck.name}</div>
+                          <div className="text-xs text-secondary-contrast tabular-nums">
+                            {deckCardCount} formulas
+                            {deck.sheetName ? ` · ${deck.sheetName}` : ''}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {onBrowseDeck && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                onBrowseDeck(deck);
+                              }}
+                              className="glass-button min-h-[40px] px-2.5 rounded-xl text-xs font-semibold cursor-pointer"
+                            >
+                              Browse
+                            </button>
+                          )}
+
+                          {deck.googleDriveFileId && onRefreshDeck && (
+                            <button
+                              type="button"
+                              disabled={isSyncing}
+                              onClick={() => onRefreshDeck(deck)}
+                              title="Sync sheet from Google Drive"
+                              aria-label={`Sync ${deck.name}`}
+                              className="glass-button min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center cursor-pointer"
+                            >
+                              <RefreshCw
+                                className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`}
+                              />
+                            </button>
+                          )}
+
+                          {onDeleteDeck && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setConfirmDeleteDeckId(
+                                  isConfirmingDelete ? null : deck.id
+                                )
+                              }
+                              title="Remove sheet from pool"
+                              aria-label={`Delete ${deck.name}`}
+                              className="glass-button min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {isConfirmingDelete && onDeleteDeck && (
+                        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-black/10 dark:border-white/10">
+                          <span className="text-xs font-bold">
+                            Remove "{deck.name}" and its {deckCardCount} cards?
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteDeckId(null)}
+                              className="glass-button min-h-[36px] px-2.5 rounded-lg text-xs font-semibold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmDeleteDeckId(null);
+                                onDeleteDeck(deck);
+                              }}
+                              className="glass-button-primary min-h-[36px] px-2.5 rounded-lg text-xs font-bold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Account, Drive Sync & PWA Install (5.4) */}
         <div className="p-3.5 rounded-2xl glass-panel space-y-3">

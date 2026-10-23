@@ -7,28 +7,27 @@ interface NavbarProps {
   currentView: NavView;
   onSelectView: (view: NavView) => void;
   onOpenSettingsModal: () => void;
-  dueCount: number;
+  dueCount?: number;
   isDark?: boolean;
   onToggleTheme?: () => void;
 }
 
 /**
- * Mobile-First Top Bar & Bottom Nav (5.4 & 5.5):
- * - Top bar: Logo, due count, Light/Dark mode toggle, settings button.
- * - Bottom nav (3 tabs): Decks, Progress, Settings.
+ * Mobile-First Top Bar & Bottom Nav:
+ * - Top bar: Logo, Light/Dark mode toggle, settings button (no due-count clutter).
+ * - Bottom nav (3 tabs): Review, Progress, Settings.
  * - Uses .glass-chrome (real blur 14px with opaque fallback), env(safe-area-inset-*) and >= 44x44px targets.
  */
 export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onSelectView,
   onOpenSettingsModal,
-  dueCount,
   isDark = false,
   onToggleTheme,
 }) => {
   return (
     <>
-      {/* Sticky Top Bar: Logo, Due Count, Light/Dark Toggle, Settings (5.4) */}
+      {/* Sticky Top Bar: Logo, Light/Dark Toggle, Settings */}
       <header className="sticky top-0 z-40 w-full glass-chrome border-b px-4 py-2 pt-safe">
         <div className="max-w-xl mx-auto flex items-center justify-between gap-2 min-h-[44px]">
           <div className="flex items-center gap-2 min-w-0">
@@ -41,10 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[13px] font-semibold text-secondary-contrast tabular-nums px-1.5">
-              {dueCount} due
-            </span>
-
             {onToggleTheme && (
               <button
                 type="button"
@@ -61,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               type="button"
               onClick={onOpenSettingsModal}
               aria-label="Open Settings"
-              title="Settings, Sync & Account"
+              title="Settings, Pool & Sync"
               className="glass-button min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer"
             >
               <Sliders className="w-4 h-4" />
@@ -70,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </header>
 
-      {/* Pinned Bottom 3-Tab Thumb Navigation Bar (5.5): Decks, Progress, Settings */}
+      {/* Pinned Bottom 3-Tab Thumb Navigation Bar: Review, Progress, Settings */}
       <nav
         aria-label="Primary Navigation"
         className="fixed bottom-0 left-0 right-0 z-40 glass-chrome border-t pb-safe pl-safe pr-safe"
@@ -86,7 +81,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Layers className="w-5 h-5" />
-            <span className="text-xs mt-0.5 tracking-tight whitespace-nowrap">Decks</span>
+            <span className="text-xs mt-0.5 tracking-tight whitespace-nowrap">Review</span>
           </button>
 
           <button

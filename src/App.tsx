@@ -1,14 +1,9 @@
-import React, { useState, useEffect, useMemo, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { User } from 'firebase/auth';
 import {
-  Plus,
   CheckCircle2,
   Trash2,
-  HelpCircle,
   Terminal,
-  Search,
-  ChevronDown,
-  ChevronUp,
   CloudOff,
   AlertCircle,
   ArrowRight,
@@ -22,6 +17,8 @@ import {
   DeckSessionState,
   StudyStreakState,
   UserSettings,
+  GameMode,
+  TimeAttackDuration,
 } from './types';
 import {
   getStoredDecks,
@@ -42,12 +39,12 @@ import {
   isCardDueToday,
   getLocalDateKey,
   sortDueCardsMostOverdueFirst,
+  buildUnifiedReviewQueue,
 } from './services/srsEngine';
 import { initAuth, googleSignIn, logout, getAccessToken, UnauthorizedDomainError } from './services/auth';
 import { fetchDriveFileBinary, fetchDriveFileMetadata } from './services/drive';
 import { initReviewLogStore } from './services/reviewLog';
 import { Navbar, NavView } from './components/Navbar';
-import { DeckCard } from './components/DeckCard';
 import { StudySession } from './components/StudySession';
 import { DueTodayHolder } from './components/DueTodayHolder';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
@@ -102,10 +99,6 @@ export default function App() {
   const [browseDeck, setBrowseDeck] = useState<Deck | null>(null);
   const [deckToDelete, setDeckToDelete] = useState<Deck | null>(null);
 
-  // Deck list search (>6 decks) and collapsed caught-up decks state (5.2)
-  const [deckSearchQuery, setDeckSearchQuery] = useState('');
-  const [showCaughtUpDecks, setShowCaughtUpDecks] = useState(false);
-
   // Pending ?mcp_deck= confirmation sheet state (Security 4.2 & 5.6)
   const [pendingMcpPayload, setPendingMcpPayload] = useState<McpDeckPayload | null>(null);
 
@@ -113,6 +106,8 @@ export default function App() {
   const [activeStudyDeck, setActiveStudyDeck] = useState<Deck | null>(null);
   const [activeSessionCards, setActiveSessionCards] = useState<Flashcard[]>([]);
   const [activeSessionMode, setActiveSessionMode] = useState<StudySessionMode>('recall');
+  const [activeGameMode, setActiveGameMode] = useState<GameMode>('classic');
+  const [activeTimeLimit, setActiveTimeLimit] = useState<TimeAttackDuration | undefined>(undefined);
   const [resumeMode, setResumeMode] = useState<boolean>(false);
   const [initialCardIndex, setInitialCardIndex] = useState<number>(0);
 
@@ -367,24 +362,6 @@ export default function App() {
     showToast(`Added ${newDeck.name}`);
   };
 
-  const handleUpdateDeckOverride = (deckId: string, newCardsPerDayOverride?: number) => {
-    const updatedDecks = decks.map(d =>
-      d.id === deckId ? { ...d, newCardsPerDayOverride } : d
-    );
-    setDecks(updatedDecks);
-    saveStoredDecks(updatedDecks);
-    const target = updatedDecks.find(d => d.id === deckId);
-    if (target) {
-      const deckCards = cards.filter(c => c.deckId === deckId);
-      syncDeckAndCardsToFirestore(target, deckCards).catch(() => {});
-    }
-    showToast(
-      newCardsPerDayOverride
-        ? `Set deck limit to ${newCardsPerDayOverride} new/day`
-        : 'Restored global new cards/day limit'
-    );
-  };
-
   const confirmDeleteDeck = (target: Deck) => {
     const targetCardIds = cards.filter(c => c.deckId === target.id).map(c => c.id);
     const updatedDecks = decks.filter(d => d.id !== target.id);
@@ -404,34 +381,17 @@ export default function App() {
     showToast(`Deleted "${target.name}"`);
   };
 
-  const handleStartFresh = (deck: Deck, mode: StudySessionMode = 'recall') => {
-    const deckCards = cards.filter(c => c.deckId === deck.id && !c.suspended);
-    // Bug 1.4: If mode is recall and nothing is due in this deck, use practice mode so schedule isn't ruined
-    const dueInDeck = deckCards.filter(c => isCardDueToday(c, new Date(), settings));
-    const effectiveMode =
-      mode === 'recall' && dueInDeck.length === 0 ? 'practice' : mode;
-
-    setActiveStudyDeck(deck);
-    setActiveSessionCards(deckCards);
-    setActiveSessionMode(effectiveMode);
-    setResumeMode(false);
-    setInitialCardIndex(0);
-  };
-
-  const handleResume = (deck: Deck, mode: StudySessionMode = 'recall') => {
-    const deckCards = cards.filter(c => c.deckId === deck.id && !c.suspended);
-    setActiveStudyDeck(deck);
-    setActiveSessionCards(deckCards);
-    setActiveSessionMode(mode);
-    setResumeMode(true);
-    setInitialCardIndex(0);
-  };
-
   const handleReviewDue = (options?: {
     deckId?: string;
     startCardId?: string;
     startFresh?: boolean;
+    gameMode?: GameMode;
+    timeLimitSeconds?: TimeAttackDuration;
   }) => {
+    const requestedGameMode: GameMode = options?.gameMode || 'classic';
+    const requestedTimeLimit =
+      requestedGameMode === 'time-attack' ? options?.timeLimitSeconds || 300 : undefined;
+
     if (options?.deckId) {
       const targetDeck = decks.find(d => d.id === options.deckId);
       const deckDue = sortDueCardsMostOverdueFirst(
@@ -446,30 +406,61 @@ export default function App() {
       setActiveStudyDeck(targetDeck);
       setActiveSessionCards(deckDue);
       setActiveSessionMode('recall');
+      setActiveGameMode(requestedGameMode);
+      setActiveTimeLimit(requestedTimeLimit);
       setResumeMode(!options.startFresh && !options.startCardId);
       setInitialCardIndex(cardIdx);
       return;
     }
 
-    const allDueSorted = sortDueCardsMostOverdueFirst(
-      cards.filter(c => isCardDueToday(c, new Date(), settings))
-    ).slice(0, settings.dailyReviewCap);
+    const unifiedQueue = buildUnifiedReviewQueue(cards, decks, settings, new Date());
 
-    if (allDueSorted.length === 0) return;
+    if (unifiedQueue.length === 0) {
+      // Check if there is an active saved session whose remaining cards are still valid
+      const savedSession = getDueTodaySessionState();
+      if (savedSession && !options?.startFresh && savedSession.remainingQueueIds.length > 0) {
+        const cardMap = new Map(cards.filter(c => !c.suspended).map(c => [c.id, c]));
+        const restoredQueue = savedSession.remainingQueueIds
+          .map(id => cardMap.get(id))
+          .filter((c): c is Flashcard => Boolean(c));
+        if (restoredQueue.length > 0) {
+          const syntheticDueDeck: Deck = {
+            id: '__due_today__',
+            name: 'Unified Review',
+            lastSyncedAt: new Date().toISOString(),
+            syncIntervalHours: 24,
+            columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
+            cardsCount: restoredQueue.length,
+            sessionState: savedSession,
+          };
+          setActiveStudyDeck(syntheticDueDeck);
+          setActiveSessionCards(restoredQueue);
+          setActiveSessionMode('due-continuous');
+          setActiveGameMode(savedSession.gameMode || requestedGameMode);
+          setActiveTimeLimit(savedSession.timeLimitSeconds || requestedTimeLimit);
+          setResumeMode(true);
+          setInitialCardIndex(0);
+        }
+      }
+      return;
+    }
 
+    const savedSession = getDueTodaySessionState();
     const syntheticDueDeck: Deck = {
       id: '__due_today__',
-      name: 'Due Today',
+      name: 'Unified Review',
       lastSyncedAt: new Date().toISOString(),
       syncIntervalHours: 24,
       columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
-      cardsCount: allDueSorted.length,
-      sessionState: getDueTodaySessionState(),
+      cardsCount: unifiedQueue.length,
+      sessionState: savedSession,
     };
 
     setActiveStudyDeck(syntheticDueDeck);
-    setActiveSessionCards(allDueSorted);
+    setActiveSessionCards(unifiedQueue);
     setActiveSessionMode('due-continuous');
+    setActiveGameMode(requestedGameMode);
+    setActiveTimeLimit(requestedTimeLimit);
     setResumeMode(!options?.startFresh);
     setInitialCardIndex(0);
   };
@@ -489,26 +480,22 @@ export default function App() {
     handleReviewDue({ startFresh: true });
   };
 
-  const handleStartInterleavedSession = (selectedDeckIds: string[]) => {
-    const idSet = new Set(selectedDeckIds);
-    const pool = cards.filter(c => !c.suspended && idSet.has(c.deckId));
-    if (pool.length === 0) {
-      showToast('No active cards in selected decks.');
-      return;
-    }
-
+  const handleStartPracticePool = () => {
+    const activePool = cards.filter(c => !c.suspended);
+    if (activePool.length === 0) return;
     const syntheticDeck: Deck = {
-      id: '__interleaved_session__',
-      name: 'Interleaved Recall',
+      id: '__practice_pool__',
+      name: 'Practice Pool',
       lastSyncedAt: new Date().toISOString(),
       syncIntervalHours: 24,
       columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
-      cardsCount: pool.length,
+      cardsCount: activePool.length,
     };
-
     setActiveStudyDeck(syntheticDeck);
-    setActiveSessionCards(pool);
-    setActiveSessionMode('interleaved');
+    setActiveSessionCards(activePool);
+    setActiveSessionMode('practice');
+    setActiveGameMode('classic');
+    setActiveTimeLimit(undefined);
     setResumeMode(false);
     setInitialCardIndex(0);
   };
@@ -528,8 +515,21 @@ export default function App() {
     setActiveStudyDeck(syntheticDeck);
     setActiveSessionCards(cardsToStudy);
     setActiveSessionMode(anyDueToday ? 'due-continuous' : 'practice');
+    setActiveGameMode('classic');
+    setActiveTimeLimit(undefined);
     setResumeMode(false);
     setInitialCardIndex(0);
+  };
+
+  const handleBrowseAllPool = () => {
+    setBrowseDeck({
+      id: '__all_pool__',
+      name: 'All Formula Pool',
+      lastSyncedAt: new Date().toISOString(),
+      syncIntervalHours: 24,
+      columnMapping: { statementCol: 'Statement', formulaCol: 'Formula' },
+      cardsCount: cards.length,
+    });
   };
 
   /**
@@ -692,31 +692,6 @@ export default function App() {
     showToast('Formula removed', 2000);
   };
 
-  // Sort decks: decks with due cards first; caught-up decks collapsed (5.2)
-  const { dueDecks, caughtUpDecks } = useMemo(() => {
-    const now = new Date();
-    const q = deckSearchQuery.trim().toLowerCase();
-    const filteredDecks = q
-      ? decks.filter(d => d.name.toLowerCase().includes(q))
-      : decks;
-
-    const withDue: Deck[] = [];
-    const withoutDue: Deck[] = [];
-
-    for (const d of filteredDecks) {
-      const deckDueCount = cards.filter(
-        c => c.deckId === d.id && !c.suspended && isCardDueToday(c, now, settings)
-      ).length;
-      if (deckDueCount > 0) {
-        withDue.push(d);
-      } else {
-        withoutDue.push(d);
-      }
-    }
-
-    return { dueDecks: withDue, caughtUpDecks: withoutDue };
-  }, [decks, cards, deckSearchQuery, settings]);
-
   // Active study session takes full screen
   if (activeStudyDeck) {
     return (
@@ -730,6 +705,8 @@ export default function App() {
           allDecks={decks}
           allCards={cards}
           mode={activeSessionMode}
+          gameMode={activeGameMode}
+          timeLimitSeconds={activeTimeLimit}
           resumeFromSession={resumeMode}
           initialCardIndex={initialCardIndex}
           settings={settings}
@@ -793,7 +770,7 @@ export default function App() {
       >
         {currentView === 'decks' && (
           <div className="space-y-4">
-            {/* Hero "Review N due" button across all decks at the top (5.1) */}
+            {/* Calm, minimal unified Review home screen */}
             <DueTodayHolder
               decks={decks}
               cards={cards}
@@ -801,7 +778,8 @@ export default function App() {
               settings={settings}
               onReviewDue={handleReviewDue}
               onCatchUpMode={handleCatchUpMode}
-              onStartInterleaved={handleStartInterleavedSession}
+              onStartPractice={handleStartPracticePool}
+              onOpenSettings={() => setIsSettingsOpen(true)}
             />
 
             {/* Friendly Drive Disconnected Banner (5.26 & 4.4) */}
@@ -825,123 +803,6 @@ export default function App() {
 
             {/* PWA Install Prompt shown ONLY after first completed review session (5.25) */}
             <PWAInstallButton requireFirstSessionCompleted fullWidth />
-
-            {/* Decks Header: No duplicate "N formulas · N due" line (5.1); "+" Import in Decks header only (5.5) */}
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <h1 className="text-lg font-bold tracking-tight">Formula Decks</h1>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsGuideOpen(true)}
-                  className="glass-button min-h-[44px] min-w-[44px] px-3 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
-                  title="Spreadsheet & LaTeX Formula Guide"
-                >
-                  <HelpCircle className="w-4 h-4" />
-                  <span>Guide</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsConnectModalOpen(true)}
-                  aria-label="Import deck"
-                  className="glass-button-primary min-h-[44px] min-w-[44px] px-3.5 rounded-xl text-[13px] font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                  title="Import from External MCP, Google Drive, or Excel/CSV"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Import</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Search box when more than 6 decks (5.2 & 5.16: 16px font size) */}
-            {decks.length > 6 && (
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 opacity-60" />
-                <input
-                  type="search"
-                  enterKeyHint="search"
-                  value={deckSearchQuery}
-                  onChange={e => setDeckSearchQuery(e.target.value)}
-                  placeholder="Search formula decks..."
-                  className="w-full min-h-[44px] pl-10 pr-3.5 py-2 rounded-xl text-base bg-white dark:bg-zinc-900 border border-black/15 dark:border-white/15 focus:outline-none"
-                />
-              </div>
-            )}
-
-            {/* Deck List: Decks with due cards first; caught-up decks collapsed (5.2) */}
-            {decks.length === 0 ? (
-              <div className="glass-panel rounded-2xl p-8 text-center border border-dashed border-black/20 dark:border-white/20 space-y-3">
-                <p className="text-[15px] font-bold">No formula decks yet</p>
-                <p className="text-[13px] text-secondary-contrast max-w-xs mx-auto">
-                  Import a physics spreadsheet from Google Drive, Excel (.xlsx), CSV, or link via External MCP.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsConnectModalOpen(true)}
-                  className="glass-button-primary min-h-[48px] px-5 rounded-xl text-[15px] font-bold cursor-pointer"
-                >
-                  + Import First Deck
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {dueDecks.map(deck => (
-                  <DeckCard
-                    key={deck.id}
-                    deck={deck}
-                    cards={cards.filter(c => c.deckId === deck.id)}
-                    allCards={cards}
-                    settings={settings}
-                    onResume={handleResume}
-                    onStartFresh={handleStartFresh}
-                    onRefreshDrive={handleRefreshDeck}
-                    onDeleteDeck={confirmDeleteDeck}
-                    onBrowseDeck={setBrowseDeck}
-                    onUpdateDeckOverride={handleUpdateDeckOverride}
-                    isSyncing={Boolean(syncingDeckIds[deck.id])}
-                  />
-                ))}
-
-                {/* Caught-up decks collapsed section (5.2) */}
-                {caughtUpDecks.length > 0 && (
-                  <div className="space-y-2 pt-1">
-                    {dueDecks.length > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => setShowCaughtUpDecks(prev => !prev)}
-                        className="glass-panel w-full min-h-[44px] px-3.5 py-2.5 rounded-xl text-[13px] font-bold flex items-center justify-between cursor-pointer"
-                      >
-                        <span>Caught-up decks ({caughtUpDecks.length})</span>
-                        {showCaughtUpDecks ? (
-                          <ChevronUp className="w-4 h-4" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4" />
-                        )}
-                      </button>
-                    ) : null}
-
-                    {(showCaughtUpDecks || dueDecks.length === 0) &&
-                      caughtUpDecks.map(deck => (
-                        <DeckCard
-                          key={deck.id}
-                          deck={deck}
-                          cards={cards.filter(c => c.deckId === deck.id)}
-                          allCards={cards}
-                          settings={settings}
-                          onResume={handleResume}
-                          onStartFresh={handleStartFresh}
-                          onRefreshDrive={handleRefreshDeck}
-                          onDeleteDeck={confirmDeleteDeck}
-                          onBrowseDeck={setBrowseDeck}
-                          onUpdateDeckOverride={handleUpdateDeckOverride}
-                          isSyncing={Boolean(syncingDeckIds[deck.id])}
-                        />
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -976,7 +837,7 @@ export default function App() {
             <span>Import External MCP Deck?</span>
           </span>
         }
-        subtitle="Confirm before adding formulas to your study decks"
+        subtitle="Confirm before adding formulas to your study pool"
         footer={
           pendingMcpPayload ? (
             <div className="grid grid-cols-2 gap-2">
@@ -1005,7 +866,7 @@ export default function App() {
               {pendingMcpPayload.formulas.length}{' '}
               {pendingMcpPayload.formulas.length === 1 ? 'formula' : 'formulas'}
             </strong>{' '}
-            to your decks?
+            to your formula pool?
           </p>
         )}
       </BottomSheet>
@@ -1018,7 +879,7 @@ export default function App() {
         title={
           <span className="flex items-center gap-2">
             <Trash2 className="w-4 h-4" />
-            <span>Delete Deck?</span>
+            <span>Delete Sheet?</span>
           </span>
         }
         footer={
@@ -1046,7 +907,7 @@ export default function App() {
           <p className="text-[15px] leading-relaxed">
             Are you sure you want to delete{' '}
             <strong className="font-bold">"{deckToDelete.name}"</strong>? All associated formula
-            cards will be removed.
+            cards will be removed from your pool.
           </p>
         )}
       </BottomSheet>
@@ -1068,11 +929,16 @@ export default function App() {
             onClose={() => setBrowseDeck(null)}
             onStudyCard={(deck, cardIdx) => {
               setBrowseDeck(null);
-              const deckCards = cards.filter(c => c.deckId === deck.id && !c.suspended);
-              const dueInDeck = deckCards.filter(c => isCardDueToday(c, new Date(), settings));
+              const isAllPool = deck.id === '__all_pool__';
+              const targetCards = isAllPool
+                ? cards.filter(c => !c.suspended)
+                : cards.filter(c => c.deckId === deck.id && !c.suspended);
+              const dueInTarget = targetCards.filter(c => isCardDueToday(c, new Date(), settings));
               setActiveStudyDeck(deck);
-              setActiveSessionCards(deckCards);
-              setActiveSessionMode(dueInDeck.length > 0 ? 'recall' : 'practice');
+              setActiveSessionCards(targetCards);
+              setActiveSessionMode(dueInTarget.length > 0 ? 'recall' : 'practice');
+              setActiveGameMode('classic');
+              setActiveTimeLimit(undefined);
               setResumeMode(false);
               setInitialCardIndex(cardIdx || 0);
             }}
@@ -1093,9 +959,18 @@ export default function App() {
             user={user}
             driveReconnectNeeded={driveReconnectNeeded}
             isSyncingAll={isSyncingAll}
+            decks={decks}
+            cards={cards}
+            syncingDeckIds={syncingDeckIds}
             onSignIn={handleSignIn}
             onSignOut={handleSignOut}
             onSyncAll={handleSyncAllDecks}
+            onOpenImportModal={() => setIsConnectModalOpen(true)}
+            onOpenGuideModal={() => setIsGuideOpen(true)}
+            onBrowseAllPool={handleBrowseAllPool}
+            onBrowseDeck={setBrowseDeck}
+            onRefreshDeck={handleRefreshDeck}
+            onDeleteDeck={setDeckToDelete}
             onClose={() => setIsSettingsOpen(false)}
             onSaveSettings={next => {
               setSettings(next);
