@@ -72,7 +72,18 @@ export const DueTodayHolder: React.FC<DueTodayHolderProps> = ({
   onOpenSettings,
 }) => {
   const settings = propSettings || getUserSettings();
-  const gameAnalytics = useMemo(() => getGameAnalyticsState(), [dueSessionState]);
+  const [gameAnalytics, setGameAnalytics] = useState(() => getGameAnalyticsState());
+
+  React.useEffect(() => {
+    const refresh = () => setGameAnalytics(getGameAnalyticsState());
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [dueSessionState]);
   const [selectedGameMode, setSelectedGameMode] = useState<GameMode>(
     dueSessionState?.gameMode || 'classic'
   );

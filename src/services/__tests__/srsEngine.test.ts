@@ -434,6 +434,47 @@ describe('srsEngine - ratings, caps, lapses, exam mode, and rollover', () => {
     expect(getGameAnalyticsState().recentSessions.length).toBe(1);
   });
 
+  it('saves high score even when exiting mid-round', () => {
+    saveGameAnalyticsState({ timeAttackBests: {}, recentSessions: [] });
+
+    // Mid-round classic mode exit after 2 cards with +6 score
+    const midClassic = {
+      id: 'session-mid-classic',
+      mode: 'classic' as const,
+      score: 6,
+      cardsCompleted: 2,
+      correctCount: 2,
+      incorrectCount: 0,
+      roundsCompleted: 0, // mid-round (less than 5 cards)
+      completedAt: '2026-05-10T11:00:00.000Z',
+    };
+
+    const classicSave = recordCompletedGameSession(midClassic, { forceHighScore: true });
+    expect(classicSave.isNewPersonalBest).toBe(true);
+    expect(classicSave.state.classicBest?.bestScore).toBe(6);
+    expect(classicSave.state.classicBest?.mostCardsCompleted).toBe(2);
+    expect(getGameAnalyticsState().classicBest?.bestScore).toBe(6);
+
+    // Mid-round Time Attack exit after 1 card with +3 score
+    const midTimeAttack = {
+      id: 'session-mid-ta',
+      mode: 'time-attack' as const,
+      durationSeconds: 300 as const,
+      score: 3,
+      cardsCompleted: 1,
+      correctCount: 1,
+      incorrectCount: 0,
+      roundsCompleted: 0,
+      completedAt: '2026-05-10T11:05:00.000Z',
+    };
+
+    const taSave = recordCompletedGameSession(midTimeAttack, { forceHighScore: true });
+    expect(taSave.isNewPersonalBest).toBe(true);
+    expect(taSave.state.timeAttackBests[300]?.bestScore).toBe(3);
+    expect(taSave.state.timeAttackBests[300]?.mostCardsCompleted).toBe(1);
+    expect(getGameAnalyticsState().timeAttackBests[300]?.bestScore).toBe(3);
+  });
+
   it('computes graduated card mastery, topic mastery, and historical mastery series from review logs', () => {
     const newCard = makeCard({ id: 'm-new', state: 'new', category: 'Mechanics' });
     const learningCard = makeCard({

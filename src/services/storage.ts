@@ -763,14 +763,25 @@ function isBetterPersonalBest(
  * timer expiry + re-render or page refresh) will never duplicate the session or score.
  */
 export const recordCompletedGameSession = (
-  record: GameSessionRecord
+  record: GameSessionRecord,
+  options?: { forceHighScore?: boolean }
 ): {
   state: GameAnalyticsState;
   isNewPersonalBest: boolean;
   wasDuplicate: boolean;
 } => {
   const current = getGameAnalyticsState();
-  if (current.recentSessions.some(s => s.id === record.id)) {
+  const existingSessionIndex = current.recentSessions.findIndex(s => s.id === record.id);
+  const existingSession =
+    existingSessionIndex >= 0 ? current.recentSessions[existingSessionIndex] : null;
+
+  // If this exact session ID was already saved with equal or higher score and cards, treat as duplicate unless forcing high score
+  if (
+    !options?.forceHighScore &&
+    existingSession &&
+    existingSession.score >= record.score &&
+    existingSession.cardsCompleted >= record.cardsCompleted
+  ) {
     return {
       state: current,
       isNewPersonalBest: false,
@@ -782,9 +793,13 @@ export const recordCompletedGameSession = (
   let nextClassicBest = current.classicBest;
   const nextTimeAttackBests = { ...current.timeAttackBests };
 
-  if (record.cardsCompleted > 0) {
+  if (record.cardsCompleted > 0 || record.score > 0 || options?.forceHighScore) {
     if (record.mode === 'classic') {
-      if (isBetterPersonalBest(record.score, record.cardsCompleted, current.classicBest)) {
+      if (
+        !current.classicBest ||
+        isBetterPersonalBest(record.score, record.cardsCompleted, current.classicBest) ||
+        (options?.forceHighScore && record.score >= (current.classicBest?.bestScore ?? 0))
+      ) {
         nextClassicBest = {
           bestScore: record.score,
           mostCardsCompleted: Math.max(
@@ -806,7 +821,11 @@ export const recordCompletedGameSession = (
     } else if (record.mode === 'time-attack' && record.durationSeconds) {
       const dur = record.durationSeconds;
       const existingBest = current.timeAttackBests[dur];
-      if (isBetterPersonalBest(record.score, record.cardsCompleted, existingBest)) {
+      if (
+        !existingBest ||
+        isBetterPersonalBest(record.score, record.cardsCompleted, existingBest) ||
+        (options?.forceHighScore && record.score >= (existingBest?.bestScore ?? 0))
+      ) {
         nextTimeAttackBests[dur] = {
           bestScore: record.score,
           mostCardsCompleted: Math.max(
@@ -825,10 +844,11 @@ export const recordCompletedGameSession = (
     }
   }
 
+  const filteredRecent = current.recentSessions.filter(s => s.id !== record.id);
   const nextState: GameAnalyticsState = {
     classicBest: nextClassicBest,
     timeAttackBests: nextTimeAttackBests,
-    recentSessions: [record, ...current.recentSessions].slice(0, 100),
+    recentSessions: [record, ...filteredRecent].slice(0, 100),
   };
 
   saveGameAnalyticsState(nextState);

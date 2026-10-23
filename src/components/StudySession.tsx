@@ -143,6 +143,9 @@ export const StudySession: React.FC<StudySessionProps> = ({
   const roundModalOpenTimeRef = useRef<number | null>(null);
   const hasEndedSessionRef = useRef<boolean>(false);
 
+  // Leave mid-session confirmation pop up modal
+  const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState<boolean>(false);
+
   // Header "⋯" Menu & Scratchpad Draw state (5.9 & 5.13)
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [showScratchpad, setShowScratchpad] = useState(false);
@@ -577,7 +580,21 @@ export const StudySession: React.FC<StudySessionProps> = ({
   // Keyboard shortcuts for rapid study (Again = 1, Good = 2 or 3, Easy = 4; Hard removed)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (sessionFinished || !currentCard || leechActionMode !== 'none' || isMoreMenuOpen) return;
+      if (e.key === 'Escape' && showLeaveConfirmModal) {
+        e.preventDefault();
+        setShowLeaveConfirmModal(false);
+        return;
+      }
+
+      if (
+        sessionFinished ||
+        !currentCard ||
+        leechActionMode !== 'none' ||
+        isMoreMenuOpen ||
+        showLeaveConfirmModal
+      ) {
+        return;
+      }
       if (
         document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA'
@@ -1002,6 +1019,37 @@ export const StudySession: React.FC<StudySessionProps> = ({
     return <FormattedText text={text} />;
   };
 
+  const handleBackClick = () => {
+    if (sessionFinished || queue.length === 0) {
+      onExit();
+      return;
+    }
+    setShowLeaveConfirmModal(true);
+  };
+
+  const handleConfirmLeaveAndSave = () => {
+    setShowLeaveConfirmModal(false);
+
+    if (mode !== 'practice' && mode !== 'first-time') {
+      recordCompletedGameSession(
+        {
+          id: sessionId,
+          mode: activeGameMode,
+          durationSeconds: activeGameMode === 'time-attack' ? activeTimeLimit : undefined,
+          score,
+          cardsCompleted: completedCount,
+          correctCount,
+          incorrectCount,
+          roundsCompleted: Math.floor(completedCount / 5),
+          completedAt: new Date().toISOString(),
+        },
+        { forceHighScore: true }
+      );
+    }
+
+    onExit();
+  };
+
   if (queue.length === 0) {
     return (
       <div className="max-w-md mx-auto my-12 p-6 glass-card rounded-2xl text-center space-y-4">
@@ -1149,7 +1197,7 @@ export const StudySession: React.FC<StudySessionProps> = ({
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={onExit}
+            onClick={handleBackClick}
             aria-label="Back to review home"
             className="glass-button min-h-[44px] min-w-[44px] px-3 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
           >
@@ -1224,6 +1272,69 @@ export const StudySession: React.FC<StudySessionProps> = ({
           </div>
         </div>
       </header>
+
+      {/* Leave Mid-Session Confirmation Pop Up Modal */}
+      {showLeaveConfirmModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="leave-session-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+        >
+          <div className="glass-card max-w-sm w-full rounded-3xl p-6 text-center space-y-5 border shadow-2xl relative">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center shadow-inner">
+              <Trophy className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-2">
+              <h2 id="leave-session-title" className="text-xl font-bold tracking-tight">
+                Leave Session?
+              </h2>
+              <p className="text-[14px] text-secondary-contrast leading-relaxed font-medium">
+                Are you sure you want to leave? Your current score will be saved as your high score.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 flex items-center justify-around text-center">
+              <div>
+                <div className="text-[11px] font-medium text-secondary-contrast uppercase tracking-wider">
+                  Current Score
+                </div>
+                <div className="text-lg font-bold tabular-nums mt-0.5">
+                  {score > 0 ? `+${score}` : score} pts
+                </div>
+              </div>
+              <div className="h-8 w-px bg-black/10 dark:bg-white/10" />
+              <div>
+                <div className="text-[11px] font-medium text-secondary-contrast uppercase tracking-wider">
+                  Cards Rated
+                </div>
+                <div className="text-lg font-bold tabular-nums mt-0.5">
+                  {completedCount}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirmModal(false)}
+                className="glass-button min-h-[48px] rounded-xl text-[14px] font-semibold cursor-pointer"
+              >
+                Stay
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={handleConfirmLeaveAndSave}
+                className="glass-button-primary min-h-[48px] rounded-xl text-[14px] font-bold cursor-pointer shadow-sm"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Celebratory Congratulatory Pop Up Modal after each 5-card round */}
       {completedRoundModal && (
